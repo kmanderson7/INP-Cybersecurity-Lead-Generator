@@ -1,0 +1,3939 @@
+import React, { useState, useEffect, useMemo, useCallback, memo } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import ExecutiveDashboard from './ExecutiveDashboard';
+import CalendarScheduler from './CalendarScheduler';
+import BulkEmail from './BulkEmail';
+import Analytics from './Analytics';
+import {
+  Search, Star, TrendingUp, Mail, Phone, Globe, AlertCircle, Shield,
+  DollarSign, Users, Calendar, Filter, Loader2, Crown, List, AlertTriangle,
+  Clock, Brain, Target, Eye, Save, CheckCircle2
+} from 'lucide-react';
+
+/* ---------------- Error Boundary Component ---------------- */
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('Dashboard Error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-6 bg-red-50 border border-red-200 rounded-lg">
+          <h2 className="text-lg font-semibold text-red-800 mb-2">Something went wrong</h2>
+          <p className="text-red-600 mb-4">The dashboard encountered an error. Please refresh the page.</p>
+          <Button onClick={() => window.location.reload()} className="bg-red-600 hover:bg-red-700">
+            Refresh Page
+          </Button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+/* ---------------- Netlify Functions client (pure JS) ---------------- */
+const netlifyAPI = {
+  async _postJSON(path, body, opts = {}) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), opts.timeoutMs ?? 15000);
+
+    try {
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body ?? {}),
+        signal: controller.signal,
+      });
+
+      const text = await res.text();
+      let data;
+      try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+
+      if (!res.ok) {
+        const msg = data?.error || data?.message || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+      return data;
+    } finally {
+      clearTimeout(id);
+    }
+  },
+
+  async fetchLeads(criteria) {
+    return this._postJSON('/.netlify/functions/fetch-leads', { ...criteria, source: 'apollo' });
+  },
+
+  async fetchNewsLeads(criteria) {
+    // must match your function name (news-leads)
+    return this._postJSON('/.netlify/functions/news-leads', criteria);
+  },
+
+  async analyzeTech(domain) {
+    return this._postJSON('/.netlify/functions/enrich-company', { domain });
+  },
+
+  async enrichCompany(domain) {
+    return this.analyzeTech(domain);
+  },
+
+  async aggregateSignals(domain, company, industry, signals = []) {
+    return this._postJSON('/.netlify/functions/aggregate-signals', {
+      domain, company, industry, signals
+    });
+  },
+
+  async getExecutiveMove(domain, company) {
+    return this._postJSON('/.netlify/functions/exec-moves', { domain, company });
+  },
+
+  async getBreachProximity(domain, industry) {
+    return this._postJSON('/.netlify/functions/breach-proximity', { domain, industry });
+  },
+
+  async getRegulatoryCountdown(domain, industry) {
+    return this._postJSON('/.netlify/functions/reg-countdown', { domain, industry });
+  },
+
+  async getSurfaceRegression(domain) {
+    return this._postJSON('/.netlify/functions/surface-regression', { domain });
+  },
+
+  async getInsuranceRenewal(domain, industry, existingControls = []) {
+    return this._postJSON('/.netlify/functions/ins-renewal', { domain, industry, existingControls });
+  },
+
+  async getWorkforceStress(domain, company) {
+    return this._postJSON('/.netlify/functions/workforce-stress', { domain, company });
+  },
+
+  async getBoardHeatmap(domain, company) {
+    return this._postJSON('/.netlify/functions/board-heatmap', { domain, company });
+  },
+
+  async getDarkWebExposure(domain) {
+    return this._postJSON('/.netlify/functions/dw-exposure', { domain });
+  },
+
+  async getConferenceIntent(conference = 'RSA', year = new Date().getFullYear(), company) {
+    return this._postJSON('/.netlify/functions/conf-intent', { conference, year, company });
+  },
+
+  async getSaasConsolidation(domain, company) {
+    return this._postJSON('/.netlify/functions/saas-consolidation', { domain, company });
+  },
+
+  async sendEmail(to, subject, body, leadId, persona = 'CISO', tone = 'professional') {
+    return this._postJSON('/.netlify/functions/send-email', {
+      to, subject, body, leadId, persona, tone
+    });
+  },
+
+  async scheduleCall(leadId, contactInfo, timeSlot) {
+    return this._postJSON('/.netlify/functions/schedule-call', {
+      leadId, contactInfo, timeSlot
+    });
+  },
+};
+
+const EnhancedLeadGenDashboard = () => {
+  const [companies, setCompanies] = useState([]);
+  const [selectedCompany, setSelectedCompany] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterIndustry, setFilterIndustry] = useState('all');
+  const [showLeadGen, setShowLeadGen] = useState(false);
+  const [apiConnected, setApiConnected] = useState(false);
+  const [currentView, setCurrentView] = useState('executive'); // executive, detailed, kanban
+  const [filterState, setFilterState] = useState('all'); // State filtering
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+
+  // Email and communication state
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [showCalendarModal, setShowCalendarModal] = useState(false);
+  const [showBulkEmailModal, setShowBulkEmailModal] = useState(false);
+  const [showAnalyticsModal, setShowAnalyticsModal] = useState(false);
+  const [emailData, setEmailData] = useState({
+    to: '',
+    subject: '',
+    body: '',
+    persona: 'CISO',
+    tone: 'professional'
+  });
+  const [emailSending, setEmailSending] = useState(false);
+
+  // separate loading flags (no cross-locking)
+  const [loadingApollo, setLoadingApollo] = useState(false);
+  const [loadingNews, setLoadingNews] = useState(false);
+
+  // Tech Analysis
+  const [analysis, setAnalysis] = useState(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError] = useState(null);
+
+  // Signals filtering state
+  const [signalFilter, setSignalFilter] = useState('all');
+  const [severityFilter, setSeverityFilter] = useState('all');
+
+  // Score explanation state
+  const [showScoreExplanation, setShowScoreExplanation] = useState(false);
+
+  // Saved Segments state
+  const [savedSegments, setSavedSegments] = useState([]);
+  const [showSaveSegmentModal, setShowSaveSegmentModal] = useState(false);
+  const [segmentName, setSegmentName] = useState('');
+  const [activeSegment, setActiveSegment] = useState(null);
+
+  // Kanban view state
+  const [draggedCompany, setDraggedCompany] = useState(null);
+  const [dragOverColumn, setDragOverColumn] = useState(null);
+
+  // Outreach Engine v2 state
+  const [outreachPersona, setOutreachPersona] = useState('CISO');
+  const [outreachTone, setOutreachTone] = useState('formal');
+  const [outreachVariants, setOutreachVariants] = useState([]);
+  const [selectedVariant, setSelectedVariant] = useState(0);
+
+  // Light Sequencing state
+  const [sequences, setSequences] = useState([]);
+  const [showSequenceModal, setShowSequenceModal] = useState(false);
+  const [selectedSequenceCompany, setSelectedSequenceCompany] = useState(null);
+
+  // Load saved segments from localStorage on component mount
+  useEffect(() => {
+    const saved = localStorage.getItem('leadgen-saved-segments');
+    if (saved) {
+      try {
+        setSavedSegments(JSON.parse(saved));
+      } catch (error) {
+        console.error('Failed to load saved segments:', error);
+      }
+    }
+  }, []);
+
+  // Save segments to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem('leadgen-saved-segments', JSON.stringify(savedSegments));
+  }, [savedSegments]);
+
+  const getCurrentFilters = () => {
+    return {
+      searchTerm,
+      filterIndustry,
+      filterState,
+      signalFilter,
+      severityFilter,
+    };
+  };
+
+  const saveCurrentSegment = () => {
+    if (!segmentName.trim()) return;
+
+    const filteredCompanies = getFilteredCompanies();
+    const newSegment = {
+      id: Date.now().toString(),
+      name: segmentName,
+      filters: getCurrentFilters(),
+      count: filteredCompanies.length,
+      avgScore: filteredCompanies.length > 0 ?
+        Math.round(filteredCompanies.reduce((sum, c) => sum + c.leadScore, 0) / filteredCompanies.length) : 0,
+      createdAt: new Date().toISOString(),
+      lastUsed: new Date().toISOString()
+    };
+
+    setSavedSegments(prev => [...prev, newSegment]);
+    setSegmentName('');
+    setShowSaveSegmentModal(false);
+    setActiveSegment(newSegment.id);
+  };
+
+  const loadSegment = (segment) => {
+    const filters = segment.filters;
+    setSearchTerm(filters.searchTerm || '');
+    setFilterIndustry(filters.filterIndustry || 'all');
+    setFilterState(filters.filterState || 'all');
+    setSignalFilter(filters.signalFilter || 'all');
+    setSeverityFilter(filters.severityFilter || 'all');
+
+    // Update last used timestamp
+    setSavedSegments(prev =>
+      prev.map(s => s.id === segment.id ? { ...s, lastUsed: new Date().toISOString() } : s)
+    );
+
+    setActiveSegment(segment.id);
+  };
+
+  const deleteSegment = (segmentId) => {
+    setSavedSegments(prev => prev.filter(s => s.id !== segmentId));
+    if (activeSegment === segmentId) {
+      setActiveSegment(null);
+    }
+  };
+
+  const getFilteredCompanies = () => {
+    return companies.filter(
+      (company) =>
+        company.name.toLowerCase().includes(searchTerm.toLowerCase()) &&
+        (filterIndustry === 'all' || company.industry === filterIndustry) &&
+        (filterState === 'all' || extractStateFromLocation(company.location) === filterState)
+    );
+  };
+
+  // Kanban functions
+  const updateCompanyStatus = (companyId, newStatus) => {
+    setCompanies(prev =>
+      prev.map(company =>
+        company.id === companyId
+          ? { ...company, status: newStatus }
+          : company
+      )
+    );
+  };
+
+  const handleDragStart = (e, company) => {
+    setDraggedCompany(company);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e, columnStatus) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverColumn(columnStatus);
+  };
+
+  const handleDragLeave = (e) => {
+    // Only clear if we're actually leaving the column area
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      setDragOverColumn(null);
+    }
+  };
+
+  const handleDrop = (e, newStatus) => {
+    e.preventDefault();
+    if (draggedCompany && draggedCompany.status !== newStatus) {
+      updateCompanyStatus(draggedCompany.id, newStatus);
+    }
+    setDraggedCompany(null);
+    setDragOverColumn(null);
+  };
+
+  const getKanbanColumns = () => {
+    const statuses = ['New Lead', 'Contacted', 'Meeting', 'Nurture'];
+    const filteredCompanies = getFilteredCompanies();
+
+    return statuses.map(status => {
+      const companies = filteredCompanies.filter(company => company.status === status);
+      const avgScore = companies.length > 0
+        ? Math.round(companies.reduce((sum, c) => sum + c.leadScore, 0) / companies.length)
+        : 0;
+
+      return {
+        status,
+        companies,
+        count: companies.length,
+        avgScore
+      };
+    });
+  };
+
+  const getDomainFromUrl = (url) => {
+    try {
+      const u = new URL(url.startsWith('http') ? url : `https://${url}`);
+      return u.hostname;
+    } catch {
+      return url;
+    }
+  };
+
+  const extractStateFromLocation = (location) => {
+    if (!location) return '';
+    // Extract state abbreviation from "City, ST" format
+    const parts = location.split(', ');
+    return parts.length > 1 ? parts[1].trim() : '';
+  };
+
+  const getUniqueStates = (companies) => {
+    const states = new Set();
+    companies.forEach(company => {
+      const state = extractStateFromLocation(company.location);
+      if (state) states.add(state);
+    });
+    return Array.from(states).sort();
+  };
+
+  const getUniqueIndustries = (companies) => {
+    const industries = new Set();
+    companies.forEach(company => {
+      if (company.industry) industries.add(company.industry);
+    });
+    return Array.from(industries).sort();
+  };
+
+  const openEmailModal = (company) => {
+    const executive = company.executives?.[0];
+    setEmailData({
+      to: executive?.email || '',
+      subject: `Cybersecurity consultation for ${company.name}`,
+      body: generatePersonalizedEmail(company, 'CISO', 'professional'),
+      persona: 'CISO',
+      tone: 'professional'
+    });
+    setShowEmailModal(true);
+  };
+
+  const openCalendarModal = (company) => {
+    setSelectedCompany(company);
+    setShowCalendarModal(true);
+  };
+
+  const handleMeetingScheduled = (leadId, meetingData) => {
+    // Update the company status to "Meeting"
+    setCompanies(prev => prev.map(company => {
+      if (company.id === leadId) {
+        return {
+          ...company,
+          status: 'Meeting',
+          lastUpdated: new Date().toISOString(),
+          recentActivity: [
+            ...company.recentActivity || [],
+            `Meeting scheduled for ${meetingData.date} at ${meetingData.time}`
+          ]
+        };
+      }
+      return company;
+    }));
+
+    // Show success message
+    alert(`Meeting scheduled successfully! Calendar invite will be sent to ${selectedCompany?.executives?.[0]?.email || 'the contact'}.`);
+  };
+
+  const renderActivityTimeline = (company) => {
+    if (!company) return null;
+
+    // Generate activity items from company data
+    const activities = [];
+
+    // Add recent activities from company data
+    if (company.recentActivity) {
+      company.recentActivity.forEach((activity, index) => {
+        const isRecentMeeting = activity.toLowerCase().includes('meeting scheduled');
+        activities.push({
+          id: `activity-${index}`,
+          type: isRecentMeeting ? 'meeting' : 'activity',
+          title: activity,
+          timestamp: company.lastUpdated || new Date().toISOString(),
+          icon: isRecentMeeting ? Calendar : AlertCircle,
+          color: isRecentMeeting ? 'green' : 'blue'
+        });
+      });
+    }
+
+    // Add default activities if none exist
+    if (activities.length === 0) {
+      activities.push(
+        {
+          id: 'lead-identified',
+          type: 'lead',
+          title: 'Lead identified',
+          timestamp: company.lastUpdated || new Date().toISOString(),
+          icon: Star,
+          color: 'blue'
+        },
+        {
+          id: 'intel-gathered',
+          type: 'intelligence',
+          title: 'Company intelligence gathered',
+          timestamp: new Date(Date.now() - 5 * 60000).toISOString(), // 5 minutes ago
+          icon: Shield,
+          color: 'gray'
+        }
+      );
+    }
+
+    // Sort by timestamp (newest first)
+    activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    const getActivityColor = (color) => {
+      const colors = {
+        blue: 'bg-blue-50 border-blue-200',
+        green: 'bg-green-50 border-green-200',
+        gray: 'bg-gray-50 border-gray-200',
+        orange: 'bg-orange-50 border-orange-200'
+      };
+      return colors[color] || colors.gray;
+    };
+
+    const getDotColor = (color) => {
+      const colors = {
+        blue: 'bg-blue-500',
+        green: 'bg-green-500',
+        gray: 'bg-gray-400',
+        orange: 'bg-orange-500'
+      };
+      return colors[color] || colors.gray;
+    };
+
+    const formatTimestamp = (timestamp) => {
+      const date = new Date(timestamp);
+      const now = new Date();
+      const diffMs = now - date;
+      const diffMinutes = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMinutes / 60);
+      const diffDays = Math.floor(diffHours / 24);
+
+      if (diffMinutes < 1) return 'Just now';
+      if (diffMinutes < 60) return `${diffMinutes} min ago`;
+      if (diffHours < 24) return `${diffHours}h ago`;
+      if (diffDays < 7) return `${diffDays}d ago`;
+
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      });
+    };
+
+    return activities.map((activity, index) => {
+      const IconComponent = activity.icon;
+      return (
+        <div
+          key={activity.id}
+          className={`flex items-center gap-3 p-3 rounded-lg border ${getActivityColor(activity.color)}`}
+        >
+          <div className={`w-3 h-3 rounded-full ${getDotColor(activity.color)}`} />
+          <IconComponent className="w-4 h-4 text-gray-500" />
+          <div className="flex-1">
+            <p className="font-medium text-sm">{activity.title}</p>
+            <p className="text-xs text-gray-600">{formatTimestamp(activity.timestamp)}</p>
+          </div>
+          {activity.type === 'meeting' && (
+            <Badge variant="outline" className="text-green-700 border-green-300">
+              Scheduled
+            </Badge>
+          )}
+        </div>
+      );
+    });
+  };
+
+  const renderSignalsTab = (company) => {
+    if (!company) return null;
+
+    // Generate sample signals for the company
+    const signals = generateSignalsForCompany(company);
+
+    const signalTypeIcons = {
+      'breach_proximity': AlertTriangle,
+      'reg_countdown': Clock,
+      'exec_move': Users,
+      'ins_renewal': Shield,
+      'surface_regression': TrendingUp,
+      'ai_gap': Brain,
+      'rfp': Target,
+      'workforce_stress': AlertCircle,
+      'board_heat': Crown,
+      'darkweb': Eye,
+      'conference': Calendar,
+      'consolidation': Star
+    };
+
+    const filteredSignals = signals.filter(signal => {
+      if (signalFilter !== 'all' && signal.type !== signalFilter) return false;
+      if (severityFilter !== 'all' && signal.severity !== severityFilter) return false;
+      return true;
+    });
+
+    const formatSignalType = (type) => {
+      const typeMap = {
+        'breach_proximity': 'Breach Proximity',
+        'reg_countdown': 'Regulatory Deadline',
+        'exec_move': 'Executive Change',
+        'ins_renewal': 'Insurance Renewal',
+        'surface_regression': 'Security Regression',
+        'ai_gap': 'AI Governance Gap',
+        'rfp': 'RFP Activity',
+        'workforce_stress': 'Workforce Stress',
+        'board_heat': 'Board Priority',
+        'darkweb': 'Dark Web Exposure',
+        'conference': 'Conference Intent',
+        'consolidation': 'SaaS Consolidation'
+      };
+      return typeMap[type] || type.replace('_', ' ');
+    };
+
+    const getSeverityColor = (severity) => {
+      const colors = {
+        'high': 'bg-red-100 text-red-800 border-red-200',
+        'medium': 'bg-yellow-100 text-yellow-800 border-yellow-200',
+        'low': 'bg-green-100 text-green-800 border-green-200'
+      };
+      return colors[severity] || colors.low;
+    };
+
+    const getScoreImpactColor = (impact) => {
+      if (impact >= 25) return 'text-red-600 font-semibold';
+      if (impact >= 15) return 'text-orange-600 font-medium';
+      if (impact >= 5) return 'text-blue-600';
+      return 'text-gray-600';
+    };
+
+    return (
+      <div className="space-y-4">
+        {/* Filters */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="w-5 h-5" />
+              Signal Intelligence
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-4 mb-4">
+              <div className="flex items-center gap-2">
+                <Filter className="w-4 h-4" />
+                <select
+                  value={signalFilter}
+                  onChange={(e) => setSignalFilter(e.target.value)}
+                  className="border rounded px-2 py-1 text-sm"
+                >
+                  <option value="all">All Types</option>
+                  <option value="breach_proximity">Breach Proximity</option>
+                  <option value="reg_countdown">Regulatory</option>
+                  <option value="exec_move">Executive Changes</option>
+                  <option value="workforce_stress">Workforce Stress</option>
+                  <option value="board_heat">Board Priority</option>
+                  <option value="darkweb">Dark Web</option>
+                  <option value="consolidation">Consolidation</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600">Severity:</span>
+                <select
+                  value={severityFilter}
+                  onChange={(e) => setSeverityFilter(e.target.value)}
+                  className="border rounded px-2 py-1 text-sm"
+                >
+                  <option value="all">All Levels</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Signals Timeline */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Active Signals ({filteredSignals.length})</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {filteredSignals.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <Shield className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                  <p>No signals match the current filters</p>
+                </div>
+              ) : (
+                filteredSignals.map((signal, index) => {
+                  const IconComponent = signalTypeIcons[signal.type] || AlertCircle;
+                  return (
+                    <div
+                      key={signal.id || index}
+                      className="flex items-start gap-3 p-4 border rounded-lg hover:bg-gray-50"
+                    >
+                      <div className="flex-shrink-0">
+                        <IconComponent className="w-5 h-5 text-gray-600" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h4 className="font-medium text-sm">
+                            {formatSignalType(signal.type)}
+                          </h4>
+                          <Badge className={`text-xs ${getSeverityColor(signal.severity)}`}>
+                            {signal.severity.toUpperCase()}
+                          </Badge>
+                          <span className={`text-xs ${getScoreImpactColor(signal.scoreImpact)}`}>
+                            +{signal.scoreImpact} score
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-700 mb-2">{signal.details}</p>
+                        <div className="text-xs text-gray-500">
+                          {new Date(signal.occurredAt).toLocaleDateString()} •
+                          Confidence: {signal.confidence || 'medium'}
+                        </div>
+                        {signal.evidence && signal.evidence.length > 0 && (
+                          <details className="mt-2">
+                            <summary className="text-xs text-blue-600 cursor-pointer hover:text-blue-800">
+                              View Evidence ({signal.evidence.length})
+                            </summary>
+                            <div className="mt-1 pl-4 border-l-2 border-blue-200">
+                              {signal.evidence.map((evidence, evidenceIndex) => (
+                                <p key={evidenceIndex} className="text-xs text-gray-600 py-1">
+                                  • {evidence}
+                                </p>
+                              ))}
+                            </div>
+                          </details>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  };
+
+  const calculateScoreBreakdown = (company) => {
+    const signals = generateSignalsForCompany(company);
+
+    // Base score calculation
+    let baseScore = 20;
+
+    // Industry scoring
+    const industryScores = {
+      'Healthcare': 15,
+      'Finance': 15,
+      'Software': 12,
+      'Technology': 12,
+      'Manufacturing': 10,
+      'Retail': 8
+    };
+    baseScore += industryScores[company.industry] || 5;
+
+    // Size scoring
+    if (company.employees >= 5000) baseScore += 15;
+    else if (company.employees >= 1000) baseScore += 12;
+    else if (company.employees >= 500) baseScore += 8;
+    else if (company.employees >= 100) baseScore += 5;
+
+    // News/activity scoring
+    if (company.news && company.news.length > 0) {
+      baseScore += Math.min(company.news.length * 2, 10);
+    }
+
+    baseScore = Math.min(baseScore, 60);
+
+    // Signal impact calculation
+    const signalImpact = signals.reduce((sum, signal) => sum + (signal.scoreImpact || 0), 0);
+
+    // Freshness boost
+    const freshnessBoost = company.lastUpdated ?
+      (Date.now() - new Date(company.lastUpdated).getTime()) / (1000 * 60 * 60) <= 72 ? 5 : 0 : 0;
+
+    // Staleness decay
+    const stalenessDecay = company.lastUpdated ?
+      Math.max(0, Math.floor((Date.now() - new Date(company.lastUpdated).getTime()) / (1000 * 60 * 60 * 24) * 0.5)) : 0;
+
+    const finalScore = Math.max(0, Math.min(100, baseScore + signalImpact + freshnessBoost - stalenessDecay));
+
+    return {
+      finalScore: Math.round(finalScore),
+      baseScore,
+      signalImpact,
+      freshnessBoost,
+      stalenessDecay,
+      signals,
+      breakdown: [
+        { label: 'Company Fundamentals', value: baseScore, type: 'base' },
+        ...signals.slice(0, 3).map(signal => ({
+          label: formatSignalTypeForBreakdown(signal.type),
+          value: signal.scoreImpact,
+          type: 'signal',
+          details: signal.details
+        })),
+        ...(freshnessBoost > 0 ? [{ label: 'Recent Activity', value: freshnessBoost, type: 'freshness' }] : []),
+        ...(stalenessDecay > 0 ? [{ label: 'Staleness Penalty', value: -stalenessDecay, type: 'decay' }] : [])
+      ].filter(item => item.value !== 0)
+    };
+  };
+
+  const formatSignalTypeForBreakdown = (type) => {
+    const typeMap = {
+      'breach_proximity': 'Breach Risk',
+      'reg_countdown': 'Regulatory Pressure',
+      'exec_move': 'Executive Change',
+      'ins_renewal': 'Insurance Renewal',
+      'surface_regression': 'Security Regression',
+      'ai_gap': 'AI Governance Gap',
+      'rfp': 'RFP Activity',
+      'workforce_stress': 'Workforce Stress',
+      'board_heat': 'Board Priority',
+      'darkweb': 'Dark Web Exposure',
+      'conference': 'Conference Intent',
+      'consolidation': 'SaaS Consolidation'
+    };
+    return typeMap[type] || type.replace('_', ' ');
+  };
+
+  const renderScoreExplanation = (company) => {
+    const breakdown = calculateScoreBreakdown(company);
+
+    return (
+      <div className="absolute top-full right-0 mt-2 w-80 bg-white border rounded-lg shadow-lg z-50 p-4">
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="font-semibold text-sm">Score Breakdown</h3>
+          <button
+            onClick={() => setShowScoreExplanation(false)}
+            className="text-gray-400 hover:text-gray-600"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="space-y-2 mb-3">
+          {breakdown.breakdown.map((item, index) => (
+            <div key={index} className="flex justify-between items-center py-1">
+              <div className="flex-1">
+                <span className="text-sm text-gray-700">{item.label}</span>
+                {item.details && (
+                  <p className="text-xs text-gray-500 mt-1">{item.details}</p>
+                )}
+              </div>
+              <span className={`text-sm font-medium ${
+                item.value > 0 ? 'text-green-600' : 'text-red-600'
+              }`}>
+                {item.value > 0 ? '+' : ''}{item.value}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div className="border-t pt-2">
+          <div className="flex justify-between items-center">
+            <span className="font-semibold text-sm">Total Score</span>
+            <span className="font-bold text-lg">{breakdown.finalScore}/100</span>
+          </div>
+        </div>
+
+        <div className="mt-3 text-xs text-gray-500">
+          <p>• Base score from industry, size, and activity</p>
+          <p>• Signal impacts include recent security indicators</p>
+          <p>• Freshness boost for recent updates (72h)</p>
+        </div>
+      </div>
+    );
+  };
+
+  const generateDecisionCards = (company) => {
+    const signals = generateSignalsForCompany(company);
+    const topSignals = signals.slice(0, 3);
+
+    const whyNow = [];
+    const whatFirst = [];
+    const risksWaiting = [];
+
+    // Generate Why Now based on signals
+    if (topSignals.length > 0) {
+      topSignals.forEach(signal => {
+        switch (signal.type) {
+          case 'reg_countdown':
+            whyNow.push('Regulatory compliance deadline approaching');
+            risksWaiting.push('Potential fines and compliance violations');
+            break;
+          case 'workforce_stress':
+            whyNow.push('Security team is understaffed and stressed');
+            whatFirst.push('Assess current security staffing gaps');
+            break;
+          case 'board_heat':
+            whyNow.push('Board is actively discussing cybersecurity');
+            whatFirst.push('Prepare executive cybersecurity briefing');
+            break;
+          case 'breach_proximity':
+            whyNow.push('Recent security incidents in industry');
+            risksWaiting.push('Increased likelihood of targeted attacks');
+            break;
+          case 'darkweb':
+            whyNow.push('Company data found on dark web');
+            whatFirst.push('Immediate credential reset and monitoring');
+            risksWaiting.push('Credential stuffing and account takeover risks');
+            break;
+          case 'ins_renewal':
+            whyNow.push('Cyber insurance renewal approaching');
+            whatFirst.push('Security control gap assessment');
+            break;
+        }
+      });
+    }
+
+    // Add default recommendations based on company profile
+    if (company.industry === 'Healthcare') {
+      whatFirst.push('HIPAA compliance review');
+      risksWaiting.push('PHI exposure and regulatory penalties');
+    } else if (company.industry === 'Finance') {
+      whatFirst.push('PCI DSS and SOX compliance check');
+      risksWaiting.push('Financial data breach consequences');
+    }
+
+    if (company.employees > 1000) {
+      whatFirst.push('Enterprise security architecture review');
+    } else {
+      whatFirst.push('Security awareness training program');
+    }
+
+    // Ensure we have content for each card
+    if (whyNow.length === 0) whyNow.push('Proactive security investment timing');
+    if (whatFirst.length === 0) whatFirst.push('Security posture assessment');
+    if (risksWaiting.length === 0) risksWaiting.push('Increased cyber threat exposure');
+
+    return {
+      whyNow: whyNow.slice(0, 3),
+      whatFirst: whatFirst.slice(0, 3),
+      risksWaiting: risksWaiting.slice(0, 3)
+    };
+  };
+
+  const generateHealthMeters = (company) => {
+    const domain = company.domain || 'example.com';
+    const hash = domain.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+
+    // Generate deterministic but realistic health scores
+    const mfaSso = {
+      score: ((hash % 40) + 60), // 60-100
+      status: 'good',
+      details: ['Multi-factor authentication enabled', 'SSO integration active', 'Password policies enforced']
+    };
+
+    const edr = {
+      score: ((hash * 3) % 50) + 50, // 50-100
+      status: 'medium',
+      details: ['Endpoint detection deployed', 'Response automation partial', 'Coverage needs improvement']
+    };
+
+    const siem = {
+      score: ((hash * 7) % 60) + 40, // 40-100
+      status: 'poor',
+      details: ['Basic logging enabled', 'SIEM solution needed', 'Alert correlation missing']
+    };
+
+    // Determine status based on score
+    [mfaSso, edr, siem].forEach(meter => {
+      if (meter.score >= 80) meter.status = 'good';
+      else if (meter.score >= 60) meter.status = 'medium';
+      else meter.status = 'poor';
+    });
+
+    return { mfaSso, edr, siem };
+  };
+
+  const getHealthMeterColor = (status) => {
+    switch (status) {
+      case 'good': return 'bg-green-500';
+      case 'medium': return 'bg-yellow-500';
+      case 'poor': return 'bg-red-500';
+      default: return 'bg-gray-500';
+    }
+  };
+
+  const getHealthMeterTextColor = (status) => {
+    switch (status) {
+      case 'good': return 'text-green-700';
+      case 'medium': return 'text-yellow-700';
+      case 'poor': return 'text-red-700';
+      default: return 'text-gray-700';
+    }
+  };
+
+  const generateSignalsForCompany = (company) => {
+    // This would normally come from the actual signal functions
+    // For now, generating sample signals based on company data
+    const signals = [];
+    const domain = company.domain || 'example.com';
+
+    // Add some sample signals based on company characteristics
+    if (company.industry === 'Healthcare') {
+      signals.push({
+        id: 'reg-1',
+        type: 'reg_countdown',
+        severity: 'high',
+        scoreImpact: 30,
+        occurredAt: new Date().toISOString(),
+        details: 'HIPAA compliance audit due in 45 days',
+        confidence: 'high',
+        evidence: ['Compliance calendar reviewed', 'Previous audit cycle analysis', 'Industry regulatory timeline']
+      });
+    }
+
+    if (company.employees > 1000) {
+      signals.push({
+        id: 'workforce-1',
+        type: 'workforce_stress',
+        severity: 'medium',
+        scoreImpact: 20,
+        occurredAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+        details: '3 open CISO positions, average 67 days open',
+        confidence: 'medium',
+        evidence: ['LinkedIn job postings', 'Company career page', 'Industry hiring trends']
+      });
+    }
+
+    if (company.news && company.news.length > 0) {
+      signals.push({
+        id: 'board-1',
+        type: 'board_heat',
+        severity: 'high',
+        scoreImpact: 25,
+        occurredAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+        details: 'Cybersecurity mentioned 4 times in recent earnings call',
+        confidence: 'high',
+        evidence: ['Earnings call transcript', 'Board meeting minutes', 'Executive statements']
+      });
+    }
+
+    // Add a default set of signals for demonstration
+    signals.push(
+      {
+        id: 'breach-1',
+        type: 'breach_proximity',
+        severity: 'medium',
+        scoreImpact: 15,
+        occurredAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+        details: 'Vendor security incident affects similar companies',
+        confidence: 'medium',
+        evidence: ['Industry threat intelligence', 'Vendor security bulletins', 'Peer company analysis']
+      },
+      {
+        id: 'consolidation-1',
+        type: 'consolidation',
+        severity: 'low',
+        scoreImpact: 12,
+        occurredAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+        details: '23% potential savings from tool consolidation',
+        confidence: 'high',
+        evidence: ['Technology stack analysis', 'Vendor overlap assessment', 'Cost optimization opportunities']
+      }
+    );
+
+    return signals.sort((a, b) => new Date(b.occurredAt) - new Date(a.occurredAt));
+  };
+
+  const generatePersonalizedEmail = (company, persona, tone) => {
+    const executive = company.executives?.[0];
+    const executiveTitle = executive?.title || 'IT Decision Maker';
+
+    const toneStyles = {
+      professional: 'formal and respectful',
+      casual: 'friendly and approachable',
+      urgent: 'direct and time-sensitive'
+    };
+
+    const personaFocus = {
+      CISO: 'security strategy and risk management',
+      CTO: 'technology infrastructure and innovation',
+      COO: 'operational efficiency and business continuity',
+      CFO: 'cost optimization and business value'
+    };
+
+    return `Dear ${executive?.name || executiveTitle},
+
+I hope this email finds you well. I'm reaching out regarding cybersecurity opportunities that could benefit ${company.name}.
+
+Based on our research, we've identified several areas where ${company.name} might strengthen its security posture:
+
+${company.concerns?.slice(0, 2).map(concern => `• ${concern}`).join('\n')}
+
+Given your role in ${personaFocus[persona]} at ${company.name}, I believe a brief conversation about your current security initiatives would be valuable.
+
+Our team has helped similar ${company.industry.toLowerCase()} organizations with ${company.employees} employees enhance their security frameworks while optimizing costs and improving operational efficiency.
+
+Would you be available for a 15-minute call next week to discuss how we might support ${company.name}'s security objectives?
+
+Best regards,
+[Your Name]
+INP² Security Solutions
+
+P.S. I noticed ${company.name} is using ${company.securityTools?.[0] || 'various security tools'} - I'd be happy to share insights on how organizations are optimizing their security stack in the current threat landscape.`;
+  };
+
+  const sendEmail = async () => {
+    if (!emailData.to || !emailData.subject || !emailData.body) {
+      alert('Please fill in all required fields');
+      return;
+    }
+
+    setEmailSending(true);
+    try {
+      const result = await netlifyAPI.sendEmail(
+        emailData.to,
+        emailData.subject,
+        emailData.body,
+        selectedCompany?.id,
+        emailData.persona,
+        emailData.tone
+      );
+
+      if (result?.success) {
+        alert('Email sent successfully!');
+        setShowEmailModal(false);
+        // Log the communication
+        console.log('Email sent:', result);
+      } else {
+        throw new Error(result?.error || 'Failed to send email');
+      }
+    } catch (error) {
+      console.error('Email send error:', error);
+      alert(`Failed to send email: ${error.message}`);
+    } finally {
+      setEmailSending(false);
+    }
+  };
+
+  const runTechAnalysis = async () => {
+    if (!selectedCompany?.website) {
+      alert('No website on this company card.');
+      return;
+    }
+    setAnalysis(null);
+    setAnalysisError(null);
+    setAnalysisLoading(true);
+    try {
+      const domain = getDomainFromUrl(selectedCompany.website);
+      const result = await netlifyAPI.analyzeTech(domain);
+      if (result?.success) setAnalysis(result.analysis);
+      else throw new Error(result?.error || 'Unknown analysis error');
+    } catch (e) {
+      setAnalysisError(e.message);
+    } finally {
+      setAnalysisLoading(false);
+    }
+  };
+
+  // Outreach Engine v2 Functions
+  const generateOutreachVariants = useCallback(async (company) => {
+    if (!company) return;
+
+    const signals = generateSignalsForCompany(company);
+    const topSignals = signals
+      .sort((a, b) => (b.scoreImpact || 0) - (a.scoreImpact || 0))
+      .slice(0, 3);
+
+    const variants = [];
+
+    // Generate Variant A - Direct approach with primary signal
+    const variantA = generateEmailVariant(company, outreachPersona, outreachTone, topSignals[0], 'direct');
+    variants.push({
+      ...variantA,
+      strategy: 'Direct approach focusing on primary risk signal'
+    });
+
+    // Generate Variant B - Consultative approach with secondary signal
+    const variantB = generateEmailVariant(company, outreachPersona, outreachTone, topSignals[1] || topSignals[0], 'consultative');
+    variants.push({
+      ...variantB,
+      strategy: 'Consultative approach with industry insights'
+    });
+
+    setOutreachVariants(variants);
+    setSelectedVariant(0);
+  }, [outreachPersona, outreachTone]);
+
+  const generateEmailVariant = (company, persona, tone, signal, approach) => {
+    const personaConfig = getPersonaConfig(persona);
+    const toneConfig = getToneConfig(tone);
+
+    const topSignal = signal || { type: 'general', details: 'cybersecurity readiness assessment' };
+
+    // Generate subject lines based on approach
+    const subjects = approach === 'direct'
+      ? generateDirectSubjects(company, topSignal, personaConfig)
+      : generateConsultativeSubjects(company, topSignal, personaConfig);
+
+    const subject = subjects[Math.floor(Math.random() * subjects.length)];
+
+    // Generate email body
+    const body = generateEmailBody(company, persona, tone, topSignal, approach);
+
+    return {
+      subject,
+      body,
+      topSignal: `${formatSignalType(topSignal.type)}: ${topSignal.details}`,
+      persona,
+      tone,
+      approach
+    };
+  };
+
+  const getPersonaConfig = (persona) => {
+    const configs = {
+      CISO: {
+        title: 'CISO',
+        focus: 'technical security',
+        concerns: ['threat landscape', 'security architecture', 'compliance frameworks'],
+        language: ['risk mitigation', 'security posture', 'threat intelligence'],
+        priorities: ['Zero Trust', 'incident response', 'security automation']
+      },
+      COO: {
+        title: 'COO',
+        focus: 'operational efficiency',
+        concerns: ['business continuity', 'operational risk', 'process optimization'],
+        language: ['operational excellence', 'business resilience', 'process efficiency'],
+        priorities: ['business continuity', 'risk management', 'operational security']
+      },
+      CFO: {
+        title: 'CFO',
+        focus: 'budget and compliance',
+        concerns: ['cost optimization', 'regulatory compliance', 'ROI justification'],
+        language: ['cost-effective solutions', 'regulatory requirements', 'financial impact'],
+        priorities: ['cost reduction', 'compliance costs', 'budget optimization']
+      }
+    };
+    return configs[persona] || configs.CISO;
+  };
+
+  const getToneConfig = (tone) => {
+    const configs = {
+      formal: {
+        greeting: 'Dear',
+        style: 'professional and respectful',
+        closing: 'Best regards',
+        language: 'formal business language'
+      },
+      plain: {
+        greeting: 'Hi',
+        style: 'direct and clear',
+        closing: 'Thanks',
+        language: 'simple, straightforward language'
+      },
+      urgent: {
+        greeting: 'Hi',
+        style: 'time-sensitive and compelling',
+        closing: 'Urgently',
+        language: 'action-oriented with urgency indicators'
+      }
+    };
+    return configs[tone] || configs.formal;
+  };
+
+  const generateDirectSubjects = (company, signal, personaConfig) => {
+    const signalType = formatSignalType(signal.type);
+    return [
+      `${company.name}: ${signalType} Security Priority`,
+      `Urgent: ${signalType} Risk at ${company.name}`,
+      `${company.name} ${signalType} - Immediate Action Required`,
+      `${personaConfig.title} Alert: ${signalType} at ${company.name}`,
+      `Time-Sensitive: ${company.name} Security Gap Identified`
+    ];
+  };
+
+  const generateConsultativeSubjects = (company, signal, personaConfig) => {
+    const signalType = formatSignalType(signal.type);
+    return [
+      `${company.name}: Industry Security Benchmarking`,
+      `${company.industry} Security Insights for ${company.name}`,
+      `Peer Analysis: How ${company.name} Compares in Security`,
+      `${company.name}: Strategic Security Planning Discussion`,
+      `${company.industry} Security Trends - ${company.name} Impact`
+    ];
+  };
+
+  const generateEmailBody = (company, persona, tone, signal, approach) => {
+    const personaConfig = getPersonaConfig(persona);
+    const toneConfig = getToneConfig(tone);
+    const signalType = formatSignalType(signal.type);
+
+    const executive = company.executives && company.executives[0]
+      ? company.executives[0]
+      : { name: `${personaConfig.title}`, title: personaConfig.title };
+
+    let greeting = `${toneConfig.greeting} ${executive.name}`;
+
+    let opening = '';
+    if (approach === 'direct') {
+      opening = `I noticed ${company.name} has a ${signalType.toLowerCase()} situation that requires immediate ${personaConfig.focus} attention.`;
+    } else {
+      opening = `I've been analyzing security trends in the ${company.industry.toLowerCase()} sector and noticed some patterns that might interest you.`;
+    }
+
+    let context = '';
+    if (signal && signal.details) {
+      context = `Specifically, ${signal.details.toLowerCase()}. `;
+    }
+
+    let businessImpact = '';
+    if (persona === 'CFO') {
+      businessImpact = `This could impact ${company.name}'s compliance costs and regulatory standing. `;
+    } else if (persona === 'COO') {
+      businessImpact = `This presents operational risks that could affect business continuity. `;
+    } else {
+      businessImpact = `This poses significant security risks to ${company.name}'s infrastructure. `;
+    }
+
+    let solution = '';
+    if (approach === 'direct') {
+      solution = `Based on what I'm seeing, ${company.name} would benefit from:
+
+• ${personaConfig.priorities[0]} implementation
+• ${personaConfig.priorities[1]} assessment
+• ${personaConfig.priorities[2]} strategy review`;
+    } else {
+      solution = `Companies similar to ${company.name} in the ${company.industry.toLowerCase()} space are focusing on:
+
+• Strategic ${personaConfig.priorities[0]} initiatives
+• ${personaConfig.priorities[1]} optimization
+• ${personaConfig.priorities[2]} planning`;
+    }
+
+    let cta = '';
+    if (tone === 'urgent') {
+      cta = `Given the time-sensitive nature of this issue, would you have 15 minutes this week to discuss ${company.name}'s immediate security priorities?`;
+    } else if (tone === 'plain') {
+      cta = `Would a brief 15-minute call next week be helpful to discuss how other ${company.industry.toLowerCase()} companies are handling this?`;
+    } else {
+      cta = `I would welcome the opportunity to share relevant insights in a brief 15-minute conversation at your convenience.`;
+    }
+
+    let closing = toneConfig.closing;
+    let signature = `[Your Name]
+INP² Security Solutions
+[Your Contact Information]`;
+
+    let ps = '';
+    if (company.techStack && company.techStack.length > 0) {
+      ps = `\n\nP.S. I noticed ${company.name} is using ${company.techStack[0]} - happy to discuss security best practices specific to your current stack.`;
+    }
+
+    return `${greeting},
+
+${opening}
+
+${context}${businessImpact}
+
+${solution}
+
+${cta}
+
+${closing},
+${signature}${ps}`;
+  };
+
+  const formatSignalType = (type) => {
+    const typeMap = {
+      'breach_proximity': 'Breach Proximity',
+      'reg_countdown': 'Regulatory Deadline',
+      'exec_move': 'Executive Change',
+      'ins_renewal': 'Insurance Renewal',
+      'surface_regression': 'Security Regression',
+      'ai_gap': 'AI Governance Gap',
+      'rfp': 'RFP Activity',
+      'workforce_stress': 'Workforce Stress',
+      'board_heat': 'Board Priority',
+      'darkweb': 'Dark Web Exposure',
+      'conference': 'Conference Intent',
+      'consolidation': 'SaaS Consolidation',
+      'general': 'Security Assessment'
+    };
+    return typeMap[type] || type.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+  };
+
+  const sendOutreach = async (company, variant) => {
+    if (!company || !variant) {
+      alert('Missing company or variant information');
+      return;
+    }
+
+    try {
+      const executive = company.executives && company.executives[0]
+        ? company.executives[0]
+        : { email: 'contact@' + (company.domain || 'company.com'), name: 'Executive' };
+
+      // Store outreach in company history
+      const outreachRecord = {
+        id: Date.now().toString(),
+        timestamp: new Date().toISOString(),
+        type: 'email',
+        status: 'sent',
+        subject: variant.subject,
+        body: variant.body,
+        persona: variant.persona,
+        tone: variant.tone,
+        approach: variant.approach,
+        topSignal: variant.topSignal,
+        recipient: executive.email
+      };
+
+      // Update company with outreach history
+      const updatedCompany = {
+        ...company,
+        outreachHistory: [...(company.outreachHistory || []), outreachRecord],
+        lastContactDate: new Date().toISOString(),
+        chosenVariant: variant
+      };
+
+      // Update companies list
+      setCompanies(prev => prev.map(c =>
+        c.id === company.id ? updatedCompany : c
+      ));
+
+      // Update selected company if it's the current one
+      if (selectedCompany?.id === company.id) {
+        setSelectedCompany(updatedCompany);
+      }
+
+      alert(`Outreach sent successfully to ${executive.email}`);
+
+    } catch (error) {
+      console.error('Failed to send outreach:', error);
+      alert('Failed to send outreach. Please try again.');
+    }
+  };
+
+  const saveOutreachTemplate = (company, variant) => {
+    if (!variant) {
+      alert('No variant selected to save');
+      return;
+    }
+
+    const template = {
+      id: Date.now().toString(),
+      name: `${company.name} - ${variant.persona} ${variant.tone}`,
+      persona: variant.persona,
+      tone: variant.tone,
+      approach: variant.approach,
+      subject: variant.subject,
+      body: variant.body,
+      topSignal: variant.topSignal,
+      createdAt: new Date().toISOString()
+    };
+
+    // Save to localStorage
+    const existingTemplates = JSON.parse(localStorage.getItem('outreach-templates') || '[]');
+    existingTemplates.push(template);
+    localStorage.setItem('outreach-templates', JSON.stringify(existingTemplates));
+
+    alert(`Template saved: ${template.name}`);
+  };
+
+  const addToSequence = (company, variant) => {
+    if (!company || !variant) {
+      alert('Missing company or variant information');
+      return;
+    }
+
+    setSelectedSequenceCompany(company);
+    setShowSequenceModal(true);
+  };
+
+  // Light Sequencing Functions
+  const createSequence = (company, initialVariant) => {
+    if (!company || !initialVariant) return;
+
+    const sequenceId = `seq_${Date.now()}`;
+    const startDate = new Date();
+
+    // Generate signals for different touches
+    const signals = generateSignalsForCompany(company);
+    const topSignals = signals
+      .sort((a, b) => (b.scoreImpact || 0) - (a.scoreImpact || 0))
+      .slice(0, 3);
+
+    // Ensure we have signals for each touch
+    const touch1Signal = topSignals[0] || { type: 'general', details: 'cybersecurity assessment' };
+    const touch2Signal = topSignals[1] || { type: 'compliance', details: 'security framework review' };
+    const touch3Signal = topSignals[2] || { type: 'optimization', details: 'security stack optimization' };
+
+    const newSequence = {
+      id: sequenceId,
+      companyId: company.id,
+      companyName: company.name,
+      status: 'active',
+      createdAt: startDate.toISOString(),
+      persona: initialVariant.persona,
+      tone: initialVariant.tone,
+      touches: [
+        {
+          id: 1,
+          type: 'email',
+          title: 'Initial Email',
+          dueDate: new Date(startDate.getTime()).toISOString(),
+          status: 'pending',
+          signal: touch1Signal,
+          subject: initialVariant.subject,
+          body: initialVariant.body,
+          completed: false,
+          completedAt: null
+        },
+        {
+          id: 2,
+          type: 'linkedin',
+          title: 'LinkedIn Note',
+          dueDate: new Date(startDate.getTime() + 4 * 24 * 60 * 60 * 1000).toISOString(), // +4 days
+          status: 'pending',
+          signal: touch2Signal,
+          subject: generateLinkedInMessage(company, touch2Signal, initialVariant.persona),
+          body: '',
+          completed: false,
+          completedAt: null
+        },
+        {
+          id: 3,
+          type: 'email',
+          title: 'Follow-up Email',
+          dueDate: new Date(startDate.getTime() + 10 * 24 * 60 * 60 * 1000).toISOString(), // +10 days
+          status: 'pending',
+          signal: touch3Signal,
+          subject: generateFollowUpSubject(company, touch3Signal),
+          body: generateFollowUpEmail(company, initialVariant.persona, touch3Signal),
+          completed: false,
+          completedAt: null
+        }
+      ]
+    };
+
+    // Update sequences state
+    setSequences(prev => [...prev, newSequence]);
+
+    // Update company with sequence info
+    const updatedCompany = {
+      ...company,
+      activeSequence: sequenceId,
+      sequenceStartDate: startDate.toISOString()
+    };
+
+    setCompanies(prev => prev.map(c =>
+      c.id === company.id ? updatedCompany : c
+    ));
+
+    if (selectedCompany?.id === company.id) {
+      setSelectedCompany(updatedCompany);
+    }
+
+    // Save to localStorage
+    const updatedSequences = [...sequences, newSequence];
+    localStorage.setItem('lead-sequences', JSON.stringify(updatedSequences));
+
+    setShowSequenceModal(false);
+    alert(`3-touch sequence created for ${company.name}`);
+  };
+
+  const generateLinkedInMessage = (company, signal, persona) => {
+    const signalType = formatSignalType(signal.type);
+    const personaConfig = getPersonaConfig(persona);
+
+    const messages = [
+      `Hi! I noticed ${company.name} might be dealing with ${signalType.toLowerCase()}. As a ${personaConfig.title}, this probably impacts your ${personaConfig.focus}. Worth a quick chat?`,
+      `Following up on security trends in ${company.industry}. Seeing ${signalType.toLowerCase()} as a priority for ${personaConfig.title}s. Would love your perspective.`,
+      `Quick question about ${company.name}'s approach to ${signalType.toLowerCase()}. Helping similar ${company.industry.toLowerCase()} companies with this challenge.`
+    ];
+
+    return messages[Math.floor(Math.random() * messages.length)];
+  };
+
+  const generateFollowUpSubject = (company, signal) => {
+    const signalType = formatSignalType(signal.type);
+    return `Last attempt: ${company.name} ${signalType} insights`;
+  };
+
+  const generateFollowUpEmail = (company, persona, signal) => {
+    const personaConfig = getPersonaConfig(persona);
+    const signalType = formatSignalType(signal.type);
+
+    return `Hi there,
+
+I reached out a couple of times about ${company.name}'s ${signalType.toLowerCase()} situation but haven't heard back.
+
+I understand you're busy, but this is likely on your radar as a ${personaConfig.title}.
+
+If the timing isn't right, no problem. If it is, I have some specific insights about how other ${company.industry.toLowerCase()} companies are handling this.
+
+Quick 15-minute call to share what I'm seeing?
+
+If not, I'll leave you alone.
+
+Thanks,
+[Your Name]
+INP² Security Solutions`;
+  };
+
+  const markTouchComplete = (sequenceId, touchId) => {
+    setSequences(prev => prev.map(seq => {
+      if (seq.id !== sequenceId) return seq;
+
+      return {
+        ...seq,
+        touches: seq.touches.map(touch => {
+          if (touch.id !== touchId) return touch;
+
+          return {
+            ...touch,
+            completed: true,
+            completedAt: new Date().toISOString(),
+            status: 'completed'
+          };
+        })
+      };
+    }));
+
+    // Save to localStorage
+    const updatedSequences = sequences.map(seq => {
+      if (seq.id !== sequenceId) return seq;
+      return {
+        ...seq,
+        touches: seq.touches.map(touch => {
+          if (touch.id !== touchId) return touch;
+          return {
+            ...touch,
+            completed: true,
+            completedAt: new Date().toISOString(),
+            status: 'completed'
+          };
+        })
+      };
+    });
+    localStorage.setItem('lead-sequences', JSON.stringify(updatedSequences));
+  };
+
+  const cancelSequence = (sequenceId) => {
+    setSequences(prev => prev.filter(seq => seq.id !== sequenceId));
+
+    // Remove sequence from company
+    const sequence = sequences.find(seq => seq.id === sequenceId);
+    if (sequence) {
+      setCompanies(prev => prev.map(c => {
+        if (c.id === sequence.companyId) {
+          const { activeSequence, sequenceStartDate, ...rest } = c;
+          return rest;
+        }
+        return c;
+      }));
+    }
+
+    // Update localStorage
+    const updatedSequences = sequences.filter(seq => seq.id !== sequenceId);
+    localStorage.setItem('lead-sequences', JSON.stringify(updatedSequences));
+
+    alert('Sequence cancelled');
+  };
+
+  const getActiveSequenceForCompany = (companyId) => {
+    return sequences.find(seq => seq.companyId === companyId && seq.status === 'active');
+  };
+
+  const getDueTouches = () => {
+    const now = new Date();
+    const dueTouches = [];
+
+    sequences.forEach(sequence => {
+      sequence.touches.forEach(touch => {
+        if (!touch.completed && new Date(touch.dueDate) <= now) {
+          dueTouches.push({
+            ...touch,
+            sequenceId: sequence.id,
+            companyName: sequence.companyName
+          });
+        }
+      });
+    });
+
+    return dueTouches.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+  };
+
+  // Load sequences from localStorage on component mount
+  useEffect(() => {
+    const savedSequences = localStorage.getItem('lead-sequences');
+    if (savedSequences) {
+      try {
+        setSequences(JSON.parse(savedSequences));
+      } catch (error) {
+        console.error('Failed to load sequences:', error);
+      }
+    }
+  }, []);
+
+  async function generateRealLeads(source = 'apollo') {
+    const setFlag = source === 'news' ? setLoadingNews : setLoadingApollo;
+    setFlag(true);
+    try {
+      const criteria = {
+        industry: filterIndustry !== 'all' ? filterIndustry : 'Software',
+        minEmployees: 50,
+        maxEmployees: 1000,
+      };
+
+      const result = source === 'news'
+        ? await netlifyAPI.fetchNewsLeads(criteria)
+        : await netlifyAPI.fetchLeads(criteria);
+
+      if (result?.success && Array.isArray(result.leads)) {
+        setCompanies(result.leads);
+        if (result.leads.length) setSelectedCompany(result.leads[0]);
+        setApiConnected(true);
+        console.log(`✅ fetched ${result.leads.length} leads from ${result.source || source}`);
+      } else {
+        throw new Error('No leads returned from API');
+      }
+    } catch (e) {
+      console.error('API call failed:', e);
+      alert(`API call failed: ${e.message}. Using mock data instead.`);
+    } finally {
+      setFlag(false);
+    }
+  }
+
+  // Mock data on first load
+  useEffect(() => {
+    const generateMockLeads = () => {
+      const industries = ['Software', 'Healthcare', 'Finance', 'Manufacturing', 'Retail', 'Education', 'Government', 'Energy', 'Real Estate', 'Legal', 'Technology'];
+      const companyNames = [
+        'TechCorp Solutions', 'HealthFirst Medical', 'SecureBank Corp', 'ManuFacture Pro', 'RetailMax Inc',
+        'EduTech Systems', 'GovSolutions Ltd', 'EnergyFlow Corp', 'PropertyTech Co', 'LegalEase Partners',
+        'DataDriven Inc', 'CloudFirst Systems', 'CyberShield Corp', 'InnovateLab', 'SmartManufacturing',
+        'DigitalHealth Plus', 'FinanceSecure LLC', 'BuildTech Solutions', 'SchoolSafe Systems', 'PowerGrid Security',
+        'SafeRetail Co', 'LegalGuard Inc', 'TechFlow Dynamics', 'MedSecure Systems', 'BankTech Innovations',
+        'FactoryShield Corp', 'EduProtect Solutions', 'CityTech Systems', 'GreenEnergy Security', 'PropertyGuard LLC',
+        'CloudSecure Dynamics', 'HealthGuard Technologies', 'FinTech Innovations', 'ManufactureTech Pro', 'RetailSecure Plus',
+        'EduCloud Systems', 'GovProtect Solutions', 'EnergySafe Corp', 'RealtyTech Security', 'LawTech Innovations',
+        'DataShield Corporation', 'TechSecure Solutions', 'MedCloud Systems', 'BankGuard Technologies', 'FactorySafe Inc'
+      ];
+
+      const techStacks = [
+        ['AWS', 'React', 'Node.js', 'PostgreSQL'], ['Azure', 'Angular', 'C#', 'SQL Server'],
+        ['GCP', 'Vue.js', 'Python', 'MongoDB'], ['AWS', 'Kubernetes', 'Java', 'Oracle'],
+        ['Azure', 'Docker', 'PHP', 'MySQL'], ['GCP', 'React Native', 'Go', 'Redis']
+      ];
+
+      const securityTools = [
+        ['Okta', 'CrowdStrike', 'Splunk'], ['Microsoft Defender', 'Qualys', 'Varonis'],
+        ['Ping Identity', 'SentinelOne', 'Elastic'], ['Auth0', 'Carbon Black', 'LogRhythm'],
+        ['ForgeRock', 'Cylance', 'QRadar'], ['OneLogin', 'Sophos', 'ArcSight']
+      ];
+
+      const concernsList = [
+        ['Zero-trust architecture', 'Cloud security posture', 'SOC 2 compliance', 'Security awareness training'],
+        ['HIPAA compliance', 'Medical device security', 'Ransomware protection', 'Secure telehealth'],
+        ['PCI DSS compliance', 'Fraud detection', 'API security', 'Customer data protection'],
+        ['OT security', 'Supply chain security', 'Industrial IoT protection', 'Compliance monitoring'],
+        ['E-commerce security', 'Customer data privacy', 'Payment security', 'Inventory protection'],
+        ['FERPA compliance', 'Student data protection', 'Remote learning security', 'Campus network security']
+      ];
+
+      const activities = [
+        'Posted cybersecurity job openings', 'Attended security conference', 'Mentioned security in earnings call',
+        'Experienced security incident', 'Implementing new security tools', 'Security audit scheduled',
+        'Compliance assessment ongoing', 'Security training program launched', 'New CISO hired',
+        'Security budget increased', 'Penetration testing completed', 'Incident response plan updated'
+      ];
+
+      const mockLeads = [];
+      for (let i = 0; i < 45; i++) {
+        const industry = industries[Math.floor(Math.random() * industries.length)];
+        const employeeCount = Math.floor(Math.random() * 2000) + 50;
+        const revenue = `${Math.floor(Math.random() * 200) + 10}M`;
+        const leadScore = Math.floor(Math.random() * 100) + 1;
+        const priority = leadScore >= 80 ? 'Critical' : leadScore >= 60 ? 'High' : leadScore >= 40 ? 'Medium' : 'Low';
+        const statuses = ['New Lead', 'Contacted', 'Qualified', 'Demo Scheduled', 'Proposal Sent', 'Follow-up'];
+
+        mockLeads.push({
+          id: i + 1,
+          name: companyNames[i] || `Company ${i + 1}`,
+          industry,
+          employees: employeeCount,
+          revenue,
+          location: `${['Austin', 'Boston', 'San Francisco', 'New York', 'Chicago', 'Seattle', 'Denver', 'Atlanta'][Math.floor(Math.random() * 8)]}, ${['TX', 'MA', 'CA', 'NY', 'IL', 'WA', 'CO', 'GA'][Math.floor(Math.random() * 8)]}`,
+          website: `https://${(companyNames[i] || `company${i + 1}`).toLowerCase().replace(/\s+/g, '')}.com`,
+          leadScore,
+          priority,
+          lastContact: Math.random() > 0.3 ? `2024-07-${Math.floor(Math.random() * 30) + 1}` : null,
+          status: statuses[Math.floor(Math.random() * statuses.length)],
+          executives: [
+            {
+              name: `${['John', 'Sarah', 'Mike', 'Lisa', 'David', 'Jennifer', 'Robert', 'Emily'][Math.floor(Math.random() * 8)]} ${['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis'][Math.floor(Math.random() * 8)]}`,
+              title: ['CISO', 'CTO', 'IT Director', 'Security Manager', 'VP of Technology'][Math.floor(Math.random() * 5)],
+              email: `contact@${(companyNames[i] || `company${i + 1}`).toLowerCase().replace(/\s+/g, '')}.com`,
+            },
+          ],
+          news: [
+            {
+              date: `2024-07-${Math.floor(Math.random() * 30) + 1}`,
+              title: `${companyNames[i] || `Company ${i + 1}`} ${['raises funding', 'announces expansion', 'launches new product', 'reports growth'][Math.floor(Math.random() * 4)]}`,
+              source: ['TechCrunch', 'Business Wire', 'Company Blog', 'Industry News'][Math.floor(Math.random() * 4)],
+            },
+          ],
+          techStack: techStacks[Math.floor(Math.random() * techStacks.length)],
+          securityTools: securityTools[Math.floor(Math.random() * securityTools.length)],
+          concerns: concernsList[Math.floor(Math.random() * concernsList.length)],
+          recentActivity: [
+            activities[Math.floor(Math.random() * activities.length)],
+            activities[Math.floor(Math.random() * activities.length)],
+            activities[Math.floor(Math.random() * activities.length)],
+          ],
+          socialProof: {
+            linkedinFollowers: Math.floor(Math.random() * 50000) + 1000,
+            glassdoorRating: (Math.random() * 2 + 3).toFixed(1),
+            trustpilotScore: (Math.random() * 2 + 3).toFixed(1),
+          },
+          financials: {
+            funding: `${Math.floor(Math.random() * 100) + 5}M total raised`,
+            lastRound: `Series ${['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)]} - ${Math.floor(Math.random() * 50) + 2}M`,
+            investors: ['Accel Partners', 'Sequoia Capital', 'Andreessen Horowitz', 'Kleiner Perkins'][Math.floor(Math.random() * 4)],
+          },
+        });
+      }
+      return mockLeads;
+    };
+
+    const mockData = generateMockLeads();
+    setCompanies(mockData);
+    if (mockData.length) setSelectedCompany(mockData[0]);
+  }, []);
+
+  const getScoreColor = (score) => {
+    if (score >= 80) return 'bg-green-500';
+    if (score >= 60) return 'bg-yellow-500';
+    return 'bg-red-500';
+  };
+
+  const getPriorityColor = (priority) => {
+    switch (priority) {
+      case 'Critical': return 'bg-red-100 text-red-800';
+      case 'High': return 'bg-orange-100 text-orange-800';
+      case 'Medium': return 'bg-yellow-100 text-yellow-800';
+      default: return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  // Memoized filtered companies for performance
+  const filteredCompanies = useMemo(() => {
+    return companies.filter(
+      (company) =>
+        company.name.toLowerCase().includes(searchTerm.toLowerCase()) &&
+        (filterIndustry === 'all' || company.industry === filterIndustry) &&
+        (filterState === 'all' || extractStateFromLocation(company.location) === filterState)
+    );
+  }, [companies, searchTerm, filterIndustry, filterState]);
+
+  // Memoized unique values for better performance
+  const availableStates = useMemo(() => getUniqueStates(companies), [companies]);
+  const availableIndustries = useMemo(() => getUniqueIndustries(companies), [companies]);
+
+  return (
+    <div className="p-6 space-y-6 bg-gray-50 min-h-screen">
+      <div className="flex justify-between items-center">
+        <div className="flex items-center gap-4">
+          <img
+            src="/inp2-logo.png"
+            alt="INP² Security Logo"
+            className="w-12 h-12 object-contain"
+            onError={(e) => {
+              console.log('Logo failed to load from:', e.currentTarget.src);
+              e.currentTarget.style.display = 'none';
+            }}
+          />
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Cybersecurity Lead Generation Dashboard</h1>
+            <p className="text-sm text-gray-600">INP² Security Solutions</p>
+          </div>
+        </div>
+        <div className="flex gap-4 items-center">
+          {apiConnected && (
+            <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+              <Globe className="w-3 h-3 mr-1" />
+              API Connected
+            </Badge>
+          )}
+
+          {/* View Switcher */}
+          <div className="flex bg-gray-100 rounded-lg p-1">
+            <Button
+              variant={currentView === 'executive' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setCurrentView('executive')}
+              className="flex items-center gap-2"
+            >
+              <Crown className="w-4 h-4" />
+              Executive
+            </Button>
+            <Button
+              variant={currentView === 'detailed' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setCurrentView('detailed')}
+              className="flex items-center gap-2"
+            >
+              <List className="w-4 h-4" />
+              Detailed
+            </Button>
+            <Button
+              variant={currentView === 'kanban' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setCurrentView('kanban')}
+              className="flex items-center gap-2"
+            >
+              <Calendar className="w-4 h-4" />
+              Pipeline
+            </Button>
+          </div>
+
+          <Button className="bg-green-600 hover:bg-green-700" onClick={() => setShowLeadGen(!showLeadGen)}>
+            <Users className="w-4 h-4 mr-2" />
+            Generate Leads
+          </Button>
+
+          <Button className="bg-purple-600 hover:bg-purple-700" onClick={() => generateRealLeads('apollo')} disabled={loadingApollo}>
+            {loadingApollo ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Globe className="w-4 h-4 mr-2" />}
+            Apollo API
+          </Button>
+
+          <Button className="bg-red-600 hover:bg-red-700" onClick={() => generateRealLeads('news')} disabled={loadingNews}>
+            {loadingNews ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <AlertCircle className="w-4 h-4 mr-2" />}
+            Security News
+          </Button>
+
+          <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => setShowBulkEmailModal(true)}>
+            <Mail className="w-4 h-4 mr-2" />
+            Bulk Email
+          </Button>
+          <Button variant="outline" onClick={() => setShowAnalyticsModal(true)}>
+            <TrendingUp className="w-4 h-4 mr-2" />
+            Analytics
+          </Button>
+        </div>
+      </div>
+
+      {showLeadGen && (
+        <Card className="border-green-200 bg-green-50">
+          <CardHeader>
+            <CardTitle className="text-green-800">Lead Generation Methods</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <Card className="bg-white">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg">API Integration</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="space-y-2">
+                    <h4 className="font-medium text-sm">ZoomInfo/Apollo</h4>
+                    <p className="text-xs text-gray-600">Search companies by industry, size, tech stack</p>
+                    <Input placeholder="Industry keyword..." className="text-sm" />
+                  </div>
+                  <div className="space-y-2">
+                    <h4 className="font-medium text-sm">LinkedIn Sales Navigator</h4>
+                    <p className="text-xs text-gray-600">Target decision makers and companies</p>
+                    <Input placeholder="Job title search..." className="text-sm" />
+                  </div>
+                  <Button size="sm" className="w-full" onClick={() => generateRealLeads('apollo')} disabled={loadingApollo}>
+                    {loadingApollo ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : 'Connect Apollo'}
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg">Intelligence Gathering</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="space-y-2">
+                    <h4 className="font-medium text-sm">News Monitoring</h4>
+                    <p className="text-xs text-gray-600">Track security incidents, funding, expansions</p>
+                    <Input placeholder="Google Alerts keywords..." className="text-sm" />
+                  </div>
+                  <div className="space-y-2">
+                    <h4 className="font-medium text-sm">Job Posting Analysis</h4>
+                    <p className="text-xs text-gray-600">Companies hiring security professionals</p>
+                    <Input placeholder="Job board scraper..." className="text-sm" />
+                  </div>
+                  <Button size="sm" className="w-full" onClick={() => generateRealLeads('news')} disabled={loadingNews}>
+                    {loadingNews ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : 'Start News Monitor'}
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg">Tech Stack Analysis</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Button size="sm" className="w-full" onClick={runTechAnalysis} disabled={analysisLoading}>
+                    {analysisLoading ? 'Analyzing...' : 'Analyze Tech'}
+                  </Button>
+
+                  {analysisError && <p className="text-sm text-red-600 mt-2">Error: {analysisError}</p>}
+
+                  {analysis && (
+                    <div className="mt-4 space-y-3 text-sm">
+                      <div>
+                        <h4 className="font-medium">Summary</h4>
+                        <p className="text-gray-700">{analysis.summary}</p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <h4 className="font-medium">Front-end</h4>
+                          <div className="flex flex-wrap gap-2">
+                            {(analysis.frontEnd || []).map((t, i) => (
+                              <Badge key={i} variant="secondary">{t}</Badge>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <h4 className="font-medium">Back-end</h4>
+                          <div className="flex flex-wrap gap-2">
+                            {(analysis.backEnd || []).map((t, i) => (
+                              <Badge key={i} variant="secondary">{t}</Badge>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <h4 className="font-medium">CMS</h4>
+                          <div className="flex flex-wrap gap-2">
+                            {(analysis.cms || []).map((t, i) => (
+                              <Badge key={i} variant="secondary">{t}</Badge>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <h4 className="font-medium">Hosting</h4>
+                          <div className="flex flex-wrap gap-2">
+                            {(analysis.hosting || []).map((t, i) => (
+                              <Badge key={i} variant="secondary">{t}</Badge>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="col-span-2">
+                          <h4 className="font-medium">Analytics</h4>
+                          <div className="flex flex-wrap gap-2">
+                            {(analysis.analytics || []).map((t, i) => (
+                              <Badge key={i} variant="outline">{t}</Badge>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="col-span-2">
+                          <h4 className="font-medium flex items-center gap-2">
+                            <Shield className="w-4 h-4" /> Security Tools & Signals
+                          </h4>
+                          <div className="flex flex-wrap gap-2 mt-1">
+                            {(analysis.securityTools || []).map((t, i) => (
+                              <Badge key={i} variant="outline">{t}</Badge>
+                            ))}
+                          </div>
+                          <ul className="list-disc ml-5 mt-2 text-gray-700">
+                            {(analysis.signals || []).map((s, i) => <li key={i}>{s}</li>)}
+                          </ul>
+                        </div>
+                      </div>
+
+                      <div className="mt-2">
+                        <span className="inline-flex items-center px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-800">
+                          Confidence: {analysis.confidence ?? 0}/100
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg">Buying Intent Signals</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="space-y-2">
+                    <h4 className="font-medium text-sm">Content Consumption</h4>
+                    <p className="text-xs text-gray-600">Track security content engagement</p>
+                    <div className="flex gap-2">
+                      <Badge variant="outline">Whitepapers</Badge>
+                      <Badge variant="outline">Webinars</Badge>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <h4 className="font-medium text-sm">Search Behavior</h4>
+                    <p className="text-xs text-gray-600">Companies researching security solutions</p>
+                    <div className="flex gap-2">
+                      <Badge variant="outline">G2 Reviews</Badge>
+                      <Badge variant="outline">Comparison Pages</Badge>
+                    </div>
+                  </div>
+                  <Button size="sm" className="w-full">Track Intent</Button>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg">Data Import</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="space-y-2">
+                    <h4 className="font-medium text-sm">CSV Upload</h4>
+                    <p className="text-xs text-gray-600">Import existing prospect lists</p>
+                    <Input type="file" accept=".csv" className="text-sm" />
+                  </div>
+                  <div className="space-y-2">
+                    <h4 className="font-medium text-sm">CRM Sync</h4>
+                    <p className="text-xs text-gray-600">Salesforce, HubSpot integration</p>
+                    <Button size="sm" variant="outline" className="w-full">Connect CRM</Button>
+                  </div>
+                  <Button size="sm" className="w-full">Import Data</Button>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg">Event & Trigger Monitoring</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="space-y-2">
+                    <h4 className="font-medium text-sm">Funding Events</h4>
+                    <p className="text-xs text-gray-600">Companies that recently raised capital</p>
+                    <Input placeholder="Funding amount range..." className="text-sm" />
+                  </div>
+                  <div className="space-y-2">
+                    <h4 className="font-medium text-sm">Security Incidents</h4>
+                    <p className="text-xs text-gray-600">Breach notifications, compliance issues</p>
+                    <div className="flex gap-2">
+                      <Badge variant="outline">Breaches</Badge>
+                      <Badge variant="outline">Compliance</Badge>
+                    </div>
+                  </div>
+                  <Button size="sm" className="w-full">Monitor Events</Button>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="mt-6 p-4 bg-blue-50 rounded-lg">
+              <h4 className="font-medium text-blue-800 mb-2">💡 Pro Tips for Lead Generation:</h4>
+              <ul className="text-sm text-blue-700 space-y-1">
+                <li>• <strong>Timing is everything:</strong> Target companies 30-90 days after funding rounds</li>
+                <li>• <strong>Job posting intelligence:</strong> Companies hiring CISOs/Security Engineers are actively investing</li>
+                <li>• <strong>Technology triggers:</strong> Companies migrating to cloud often need new security solutions</li>
+                <li>• <strong>Compliance deadlines:</strong> Track upcoming regulatory requirements (SOX, GDPR, etc.)</li>
+                <li>• <strong>Industry events:</strong> Follow RSA, Black Hat attendee lists for active prospects</li>
+              </ul>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="flex gap-4 items-center bg-white p-4 rounded-lg shadow-sm">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
+          <Input
+            placeholder="Search companies..."
+            className="pl-10"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+        <select
+          className="px-4 py-2 border rounded-md"
+          value={filterIndustry}
+          onChange={(e) => setFilterIndustry(e.target.value)}
+        >
+          <option value="all">All Industries</option>
+          {availableIndustries.map(industry => (
+            <option key={industry} value={industry}>{industry}</option>
+          ))}
+        </select>
+
+        <select
+          className="px-4 py-2 border rounded-md"
+          value={filterState}
+          onChange={(e) => setFilterState(e.target.value)}
+        >
+          <option value="all">All States</option>
+          {availableStates.map(state => (
+            <option key={state} value={state}>{state}</option>
+          ))}
+        </select>
+
+        <Button
+          variant="outline"
+          onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+        >
+          <Filter className="w-4 h-4 mr-2" />
+          More Filters
+        </Button>
+
+        {/* Active Filter Indicators */}
+        <div className="flex gap-2">
+          {(filterIndustry !== 'all' || filterState !== 'all' || searchTerm) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setFilterIndustry('all');
+                setFilterState('all');
+                setSearchTerm('');
+              }}
+              className="text-xs"
+            >
+              Clear All
+            </Button>
+          )}
+
+          <span className="text-sm text-gray-600 flex items-center">
+            {filteredCompanies.length} results
+          </span>
+        </div>
+      </div>
+
+      {/* Advanced Filters Panel */}
+      {showAdvancedFilters && (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="text-lg">Advanced Filters</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Regional Grouping */}
+              <div>
+                <label className="block text-sm font-medium mb-2">Region</label>
+                <select
+                  className="w-full px-3 py-2 border rounded-md"
+                  value={filterState}
+                  onChange={(e) => setFilterState(e.target.value)}
+                >
+                  <option value="all">All Regions</option>
+                  <option value="west-coast">West Coast (CA, WA)</option>
+                  <option value="east-coast">East Coast (NY, MA)</option>
+                  <option value="southwest">Southwest (TX, CO)</option>
+                  <option value="southeast">Southeast (GA)</option>
+                  <option value="midwest">Midwest (IL)</option>
+                </select>
+              </div>
+
+              {/* Priority Level */}
+              <div>
+                <label className="block text-sm font-medium mb-2">Priority Level</label>
+                <select className="w-full px-3 py-2 border rounded-md">
+                  <option value="all">All Priorities</option>
+                  <option value="critical">Critical Only</option>
+                  <option value="high">High & Critical</option>
+                  <option value="medium-plus">Medium & Above</option>
+                </select>
+              </div>
+
+              {/* Score Range */}
+              <div>
+                <label className="block text-sm font-medium mb-2">Lead Score Range</label>
+                <select className="w-full px-3 py-2 border rounded-md">
+                  <option value="all">All Scores</option>
+                  <option value="80-100">80-100 (Critical)</option>
+                  <option value="60-79">60-79 (High)</option>
+                  <option value="40-59">40-59 (Medium)</option>
+                  <option value="0-39">0-39 (Low)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="mt-4 flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setFilterIndustry('all');
+                  setFilterState('all');
+                  setSearchTerm('');
+                }}
+              >
+                Reset All Filters
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowAdvancedFilters(false)}
+              >
+                Close
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Saved Segments Section */}
+      {savedSegments.length > 0 && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardHeader>
+            <CardTitle className="text-blue-800 flex items-center gap-2">
+              <Filter className="w-5 h-5" />
+              Saved Segments ({savedSegments.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {savedSegments.map((segment) => (
+                <div
+                  key={segment.id}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                    activeSegment === segment.id
+                      ? 'bg-blue-600 text-white border-blue-600'
+                      : 'bg-white text-gray-700 border-gray-200 hover:border-blue-300 hover:bg-blue-50'
+                  }`}
+                  onClick={() => loadSegment(segment)}
+                >
+                  <span className="text-sm font-medium">{segment.name}</span>
+                  <Badge variant="secondary" className="text-xs">
+                    {segment.count}
+                  </Badge>
+                  <span className="text-xs opacity-75">
+                    Avg: {segment.avgScore}
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteSegment(segment.id);
+                    }}
+                    className="text-red-500 hover:text-red-700 ml-1"
+                    title="Delete segment"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Filter Controls and Save Segment */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex gap-4 items-center">
+              <Input
+                placeholder="Search companies..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-64"
+              />
+              <select
+                value={filterIndustry}
+                onChange={(e) => setFilterIndustry(e.target.value)}
+                className="border rounded px-3 py-2"
+              >
+                <option value="all">All Industries</option>
+                {getUniqueIndustries(companies).map(industry => (
+                  <option key={industry} value={industry}>{industry}</option>
+                ))}
+              </select>
+              <select
+                value={filterState}
+                onChange={(e) => setFilterState(e.target.value)}
+                className="border rounded px-3 py-2"
+              >
+                <option value="all">All States</option>
+                {getUniqueStates(companies).map(state => (
+                  <option key={state} value={state}>{state}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowSaveSegmentModal(true)}
+                disabled={!searchTerm && filterIndustry === 'all' && filterState === 'all'}
+              >
+                <Filter className="w-4 h-4 mr-2" />
+                Save Segment
+              </Button>
+              {activeSegment && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setSearchTerm('');
+                    setFilterIndustry('all');
+                    setFilterState('all');
+                    setActiveSegment(null);
+                  }}
+                >
+                  Clear Filters
+                </Button>
+              )}
+            </div>
+          </div>
+          <div className="text-sm text-gray-600">
+            Showing {filteredCompanies.length} of {companies.length} companies
+            {activeSegment && (
+              <span className="ml-2 text-blue-600 font-medium">
+                (Using segment: {savedSegments.find(s => s.id === activeSegment)?.name})
+              </span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Executive Dashboard View */}
+      {currentView === 'executive' ? (
+        <ExecutiveDashboard
+          companies={filteredCompanies}
+          onCompanySelect={setSelectedCompany}
+          netlifyAPI={netlifyAPI}
+        />
+      ) : currentView === 'kanban' ? (
+        /* Kanban Pipeline View */
+        <div className="space-y-4">
+          <h3 className="text-lg font-semibold text-gray-900">Sales Pipeline</h3>
+          <div className="grid grid-cols-4 gap-4">
+            {getKanbanColumns().map((column) => (
+              <div
+                key={column.status}
+                className={`bg-gray-50 rounded-lg p-4 min-h-[600px] transition-colors ${
+                  dragOverColumn === column.status ? 'bg-blue-100 border-2 border-blue-300' : 'border border-gray-200'
+                }`}
+                onDragOver={(e) => handleDragOver(e, column.status)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, column.status)}
+              >
+                {/* Column Header */}
+                <div className="mb-4">
+                  <div className="flex justify-between items-center mb-2">
+                    <h4 className="font-semibold text-gray-800">{column.status}</h4>
+                    <Badge variant="secondary">{column.count}</Badge>
+                  </div>
+                  <div className="text-xs text-gray-600">
+                    Avg Score: {column.avgScore || 0}
+                  </div>
+                </div>
+
+                {/* Company Cards */}
+                <div className="space-y-3">
+                  {column.companies.map((company) => (
+                    <div
+                      key={company.id}
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, company)}
+                      className={`bg-white p-3 rounded border shadow-sm cursor-move transition-all hover:shadow-md ${
+                        draggedCompany?.id === company.id ? 'opacity-50' : ''
+                      }`}
+                      onClick={() => setSelectedCompany(company)}
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <h5 className="font-medium text-sm truncate">{company.name}</h5>
+                        <div className={`w-3 h-3 rounded-full ${getScoreColor(company.leadScore)}`} />
+                      </div>
+                      <div className="text-xs text-gray-600 mb-2">
+                        {company.industry} • {company.employees} employees
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs font-medium">{company.leadScore}/100</span>
+                        <Badge className={getPriorityColor(company.priority)} variant="outline">
+                          {company.priority}
+                        </Badge>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Drop Zone Indicator */}
+                {draggedCompany && dragOverColumn === column.status && draggedCompany.status !== column.status && (
+                  <div className="mt-3 p-3 border-2 border-dashed border-blue-400 rounded bg-blue-50 text-center text-blue-600 text-sm">
+                    Drop here to move to {column.status}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        /* Detailed View */
+        filteredCompanies.length > 0 && (
+        <div className="grid grid-cols-12 gap-6">
+          <div className="col-span-4 space-y-3">
+            <h3 className="text-lg font-semibold text-gray-900">Leads ({filteredCompanies.length})</h3>
+            {filteredCompanies.map((company) => (
+              <Card
+                key={company.id}
+                className={`cursor-pointer transition-all hover:shadow-md ${selectedCompany?.id === company.id ? 'ring-2 ring-blue-500' : ''}`}
+                onClick={() => setSelectedCompany(company)}
+              >
+                <CardContent className="p-4">
+                  <div className="flex justify-between items-start mb-2">
+                    <h4 className="font-semibold text-sm">{company.name}</h4>
+                    <Badge className={getPriorityColor(company.priority)}>
+                      {company.priority}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-gray-600 mb-2">
+                    {company.industry} • {company.employees} employees
+                  </p>
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-3 h-3 rounded-full ${getScoreColor(company.leadScore)}`} />
+                      <span className="text-xs font-medium">{company.leadScore}/100</span>
+                    </div>
+                    <Badge variant="outline" className="text-xs">
+                      {company.status}
+                    </Badge>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          <div className="col-span-8">
+            {selectedCompany && (
+              <div className="space-y-6">
+                <Card>
+                  <CardContent className="p-6">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h2 className="text-2xl font-bold">{selectedCompany.name}</h2>
+                        <p className="text-gray-600">{selectedCompany.industry} • {selectedCompany.location}</p>
+                      </div>
+                      <div className="text-right relative">
+                        <div className="flex items-center gap-2">
+                          <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium ${getScoreColor(selectedCompany.leadScore)} text-white`}>
+                            <Star className="w-4 h-4" />
+                            {selectedCompany.leadScore}/100
+                          </div>
+                          <button
+                            onClick={() => setShowScoreExplanation(!showScoreExplanation)}
+                            className="text-xs text-blue-600 hover:text-blue-800 underline"
+                            title="Explain Score"
+                          >
+                            Explain
+                          </button>
+                        </div>
+                        {showScoreExplanation && renderScoreExplanation(selectedCompany)}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-4 mb-4">
+                      <div className="flex items-center gap-2">
+                        <Users className="w-4 h-4 text-gray-500" />
+                        <span className="text-sm">{selectedCompany.employees} employees</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <DollarSign className="w-4 h-4 text-gray-500" />
+                        <span className="text-sm">{selectedCompany.revenue} revenue</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Globe className="w-4 h-4 text-gray-500" />
+                        <a href={selectedCompany.website} className="text-sm text-blue-600 hover:underline">Website</a>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Calendar className="w-4 h-4 text-gray-500" />
+                        <span className="text-sm">Last: {selectedCompany.lastContact || 'Never'}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => openEmailModal(selectedCompany)}
+                      >
+                        <Mail className="w-4 h-4 mr-2" />
+                        Send Email
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openCalendarModal(selectedCompany)}
+                      >
+                        <Calendar className="w-4 h-4 mr-2" />
+                        Schedule Meeting
+                      </Button>
+                      <Button size="sm" variant="outline">
+                        <Globe className="w-4 h-4 mr-2" />
+                        LinkedIn
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Tabs defaultValue="overview" className="space-y-4">
+                  <TabsList className="grid w-full grid-cols-3 md:grid-cols-4 lg:grid-cols-7">
+                    <TabsTrigger value="overview">Overview</TabsTrigger>
+                    <TabsTrigger value="contacts">Contacts</TabsTrigger>
+                    <TabsTrigger value="intelligence">Intelligence</TabsTrigger>
+                    <TabsTrigger value="signals">Signals</TabsTrigger>
+                    <TabsTrigger value="outreach">Outreach</TabsTrigger>
+                    <TabsTrigger value="activity">Activity</TabsTrigger>
+                    <TabsTrigger value="instructions">Instructions</TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="overview" className="space-y-4">
+                    {/* Decision Cards */}
+                    <div className="grid grid-cols-3 gap-4 mb-6">
+                      {(() => {
+                        const decisionCards = generateDecisionCards(selectedCompany);
+                        return (
+                          <>
+                            <Card className="border-green-200 bg-green-50">
+                              <CardHeader className="pb-3">
+                                <CardTitle className="text-lg flex items-center gap-2 text-green-800">
+                                  <TrendingUp className="w-5 h-5" />
+                                  Why Now?
+                                </CardTitle>
+                              </CardHeader>
+                              <CardContent>
+                                <ul className="space-y-2">
+                                  {decisionCards.whyNow.map((reason, i) => (
+                                    <li key={i} className="flex items-start gap-2 text-sm text-green-700">
+                                      <div className="w-2 h-2 rounded-full bg-green-500 mt-2 flex-shrink-0" />
+                                      {reason}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </CardContent>
+                            </Card>
+
+                            <Card className="border-blue-200 bg-blue-50">
+                              <CardHeader className="pb-3">
+                                <CardTitle className="text-lg flex items-center gap-2 text-blue-800">
+                                  <Target className="w-5 h-5" />
+                                  What We'd Do First
+                                </CardTitle>
+                              </CardHeader>
+                              <CardContent>
+                                <ul className="space-y-2">
+                                  {decisionCards.whatFirst.map((action, i) => (
+                                    <li key={i} className="flex items-start gap-2 text-sm text-blue-700">
+                                      <div className="w-2 h-2 rounded-full bg-blue-500 mt-2 flex-shrink-0" />
+                                      {action}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </CardContent>
+                            </Card>
+
+                            <Card className="border-red-200 bg-red-50">
+                              <CardHeader className="pb-3">
+                                <CardTitle className="text-lg flex items-center gap-2 text-red-800">
+                                  <AlertTriangle className="w-5 h-5" />
+                                  Risks of Waiting
+                                </CardTitle>
+                              </CardHeader>
+                              <CardContent>
+                                <ul className="space-y-2">
+                                  {decisionCards.risksWaiting.map((risk, i) => (
+                                    <li key={i} className="flex items-start gap-2 text-sm text-red-700">
+                                      <div className="w-2 h-2 rounded-full bg-red-500 mt-2 flex-shrink-0" />
+                                      {risk}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </CardContent>
+                            </Card>
+                          </>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Health Meters */}
+                    <Card className="mb-4">
+                      <CardHeader>
+                        <CardTitle className="text-lg flex items-center gap-2">
+                          <Shield className="w-5 h-5" />
+                          Security Health Meters
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="grid grid-cols-3 gap-6">
+                          {(() => {
+                            const health = generateHealthMeters(selectedCompany);
+                            return (
+                              <>
+                                {/* MFA/SSO Health */}
+                                <div className="text-center">
+                                  <div className="mb-3">
+                                    <div className="relative w-16 h-16 mx-auto">
+                                      <svg className="w-16 h-16 transform -rotate-90" viewBox="0 0 36 36">
+                                        <path
+                                          d="M18 2.0845
+                                            a 15.9155 15.9155 0 0 1 0 31.831
+                                            a 15.9155 15.9155 0 0 1 0 -31.831"
+                                          fill="none"
+                                          stroke="#e5e7eb"
+                                          strokeWidth="2"
+                                        />
+                                        <path
+                                          d="M18 2.0845
+                                            a 15.9155 15.9155 0 0 1 0 31.831
+                                            a 15.9155 15.9155 0 0 1 0 -31.831"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          strokeWidth="2"
+                                          strokeDasharray={`${health.mfaSso.score}, 100`}
+                                          className={getHealthMeterTextColor(health.mfaSso.status)}
+                                        />
+                                      </svg>
+                                      <div className="absolute inset-0 flex items-center justify-center">
+                                        <span className={`text-lg font-bold ${getHealthMeterTextColor(health.mfaSso.status)}`}>
+                                          {health.mfaSso.score}%
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <h4 className="font-medium text-sm">MFA/SSO</h4>
+                                  <div className={`inline-block px-2 py-1 rounded text-xs font-medium mt-1 ${
+                                    health.mfaSso.status === 'good' ? 'bg-green-100 text-green-800' :
+                                    health.mfaSso.status === 'medium' ? 'bg-yellow-100 text-yellow-800' :
+                                    'bg-red-100 text-red-800'
+                                  }`}>
+                                    {health.mfaSso.status.toUpperCase()}
+                                  </div>
+                                </div>
+
+                                {/* EDR Health */}
+                                <div className="text-center">
+                                  <div className="mb-3">
+                                    <div className="relative w-16 h-16 mx-auto">
+                                      <svg className="w-16 h-16 transform -rotate-90" viewBox="0 0 36 36">
+                                        <path
+                                          d="M18 2.0845
+                                            a 15.9155 15.9155 0 0 1 0 31.831
+                                            a 15.9155 15.9155 0 0 1 0 -31.831"
+                                          fill="none"
+                                          stroke="#e5e7eb"
+                                          strokeWidth="2"
+                                        />
+                                        <path
+                                          d="M18 2.0845
+                                            a 15.9155 15.9155 0 0 1 0 31.831
+                                            a 15.9155 15.9155 0 0 1 0 -31.831"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          strokeWidth="2"
+                                          strokeDasharray={`${health.edr.score}, 100`}
+                                          className={getHealthMeterTextColor(health.edr.status)}
+                                        />
+                                      </svg>
+                                      <div className="absolute inset-0 flex items-center justify-center">
+                                        <span className={`text-lg font-bold ${getHealthMeterTextColor(health.edr.status)}`}>
+                                          {health.edr.score}%
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <h4 className="font-medium text-sm">EDR</h4>
+                                  <div className={`inline-block px-2 py-1 rounded text-xs font-medium mt-1 ${
+                                    health.edr.status === 'good' ? 'bg-green-100 text-green-800' :
+                                    health.edr.status === 'medium' ? 'bg-yellow-100 text-yellow-800' :
+                                    'bg-red-100 text-red-800'
+                                  }`}>
+                                    {health.edr.status.toUpperCase()}
+                                  </div>
+                                </div>
+
+                                {/* SIEM Health */}
+                                <div className="text-center">
+                                  <div className="mb-3">
+                                    <div className="relative w-16 h-16 mx-auto">
+                                      <svg className="w-16 h-16 transform -rotate-90" viewBox="0 0 36 36">
+                                        <path
+                                          d="M18 2.0845
+                                            a 15.9155 15.9155 0 0 1 0 31.831
+                                            a 15.9155 15.9155 0 0 1 0 -31.831"
+                                          fill="none"
+                                          stroke="#e5e7eb"
+                                          strokeWidth="2"
+                                        />
+                                        <path
+                                          d="M18 2.0845
+                                            a 15.9155 15.9155 0 0 1 0 31.831
+                                            a 15.9155 15.9155 0 0 1 0 -31.831"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          strokeWidth="2"
+                                          strokeDasharray={`${health.siem.score}, 100`}
+                                          className={getHealthMeterTextColor(health.siem.status)}
+                                        />
+                                      </svg>
+                                      <div className="absolute inset-0 flex items-center justify-center">
+                                        <span className={`text-lg font-bold ${getHealthMeterTextColor(health.siem.status)}`}>
+                                          {health.siem.score}%
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <h4 className="font-medium text-sm">SIEM/Logging</h4>
+                                  <div className={`inline-block px-2 py-1 rounded text-xs font-medium mt-1 ${
+                                    health.siem.status === 'good' ? 'bg-green-100 text-green-800' :
+                                    health.siem.status === 'medium' ? 'bg-yellow-100 text-yellow-800' :
+                                    'bg-red-100 text-red-800'
+                                  }`}>
+                                    {health.siem.status.toUpperCase()}
+                                  </div>
+                                </div>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <Card>
+                        <CardHeader className="pb-3">
+                          <CardTitle className="text-lg flex items-center gap-2">
+                            <Shield className="w-5 h-5" />
+                            Security Concerns
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <ul className="space-y-2">
+                            {selectedCompany.concerns.map((concern, i) => (
+                              <li key={i} className="flex items-start gap-2 text-sm">
+                                <AlertCircle className="w-4 h-4 text-orange-500 mt-0.5 flex-shrink-0" />
+                                {concern}
+                              </li>
+                            ))}
+                          </ul>
+                        </CardContent>
+                      </Card>
+
+                      <Card>
+                        <CardHeader className="pb-3">
+                          <CardTitle className="text-lg">Recent Activity</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <ul className="space-y-2">
+                            {selectedCompany.recentActivity.map((activity, i) => (
+                              <li key={i} className="text-sm text-gray-700">• {activity}</li>
+                            ))}
+                          </ul>
+                        </CardContent>
+                      </Card>
+                    </div>
+
+                    <Card>
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-lg">Tech Stack & Security Tools</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-3">
+                          <div>
+                            <h4 className="font-medium text-sm mb-2">Technology Stack:</h4>
+                            <div className="flex flex-wrap gap-2">
+                              {selectedCompany.techStack.map((tech, i) => (
+                                <Badge key={i} variant="secondary">{tech}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                          <div>
+                            <h4 className="font-medium text-sm mb-2">Current Security Tools:</h4>
+                            <div className="flex flex-wrap gap-2">
+                              {selectedCompany.securityTools.map((tool, i) => (
+                                <Badge key={i} variant="outline">{tool}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </TabsContent>
+
+                  <TabsContent value="contacts" className="space-y-4">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Key Executives</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-4">
+                          {selectedCompany.executives.map((exec, i) => (
+                            <div key={i} className="flex justify-between items-center p-3 border rounded-lg">
+                              <div>
+                                <h4 className="font-semibold">{exec.name}</h4>
+                                <p className="text-sm text-gray-600">{exec.title}</p>
+                                <p className="text-sm text-blue-600">{exec.email}</p>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button size="sm" variant="outline">
+                                  <Mail className="w-4 h-4" />
+                                </Button>
+                                <Button size="sm" variant="outline">
+                                  <Globe className="w-4 h-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </TabsContent>
+
+                  <TabsContent value="intelligence" className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <Card>
+                        <CardHeader>
+                          <CardTitle>Recent News</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-3">
+                            {selectedCompany.news.map((item, i) => (
+                              <div key={i} className="border-l-2 border-blue-200 pl-3">
+                                <h4 className="font-medium text-sm">{item.title}</h4>
+                                <p className="text-xs text-gray-500">{item.source} • {item.date}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      <Card>
+                        <CardHeader>
+                          <CardTitle>Company Insights</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          <div>
+                            <h4 className="font-medium text-sm">Social Proof</h4>
+                            <p className="text-xs text-gray-600">LinkedIn: {selectedCompany.socialProof.linkedinFollowers.toLocaleString()} followers</p>
+                            <p className="text-xs text-gray-600">Glassdoor: {selectedCompany.socialProof.glassdoorRating}/5.0</p>
+                          </div>
+                          <div>
+                            <h4 className="font-medium text-sm">Funding</h4>
+                            <p className="text-xs text-gray-600">{selectedCompany.financials.funding}</p>
+                            <p className="text-xs text-gray-600">{selectedCompany.financials.lastRound}</p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="signals" className="space-y-4">
+                    {renderSignalsTab(selectedCompany)}
+                  </TabsContent>
+
+                  <TabsContent value="outreach">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Outreach Engine v2</CardTitle>
+                        <p className="text-sm text-gray-600">Generate personalized outreach with AI-powered personas and A/B variants</p>
+                      </CardHeader>
+                      <CardContent className="space-y-6">
+                        {/* Persona and Tone Selection */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium mb-2">Target Persona</label>
+                            <select
+                              className="w-full p-2 border rounded-md"
+                              value={outreachPersona}
+                              onChange={(e) => setOutreachPersona(e.target.value)}
+                            >
+                              <option value="CISO">CISO (Technical Security)</option>
+                              <option value="COO">COO (Operations & Risk)</option>
+                              <option value="CFO">CFO (Budget & Compliance)</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium mb-2">Communication Tone</label>
+                            <select
+                              className="w-full p-2 border rounded-md"
+                              value={outreachTone}
+                              onChange={(e) => setOutreachTone(e.target.value)}
+                            >
+                              <option value="formal">Formal (Executive-level)</option>
+                              <option value="plain">Plain (Direct & Clear)</option>
+                              <option value="urgent">Urgent (Time-sensitive)</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Generate Variants Button */}
+                        <div className="flex justify-center">
+                          <Button
+                            onClick={() => generateOutreachVariants(selectedCompany)}
+                            className="bg-blue-600 hover:bg-blue-700"
+                          >
+                            <Brain className="w-4 h-4 mr-2" />
+                            Generate A/B Variants
+                          </Button>
+                        </div>
+
+                        {/* A/B Variants Display */}
+                        {outreachVariants.length > 0 && (
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            {outreachVariants.map((variant, index) => (
+                              <Card key={index} className={`border-2 ${selectedVariant === index ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}>
+                                <CardHeader className="pb-3">
+                                  <CardTitle className="text-lg flex items-center justify-between">
+                                    <span>Variant {String.fromCharCode(65 + index)}</span>
+                                    <Button
+                                      size="sm"
+                                      variant={selectedVariant === index ? "default" : "outline"}
+                                      onClick={() => setSelectedVariant(index)}
+                                    >
+                                      {selectedVariant === index ? 'Selected' : 'Select'}
+                                    </Button>
+                                  </CardTitle>
+                                  <p className="text-sm text-gray-600">{variant.strategy}</p>
+                                </CardHeader>
+                                <CardContent>
+                                  <div className="space-y-3">
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">Subject Line</label>
+                                      <div className="p-2 bg-gray-50 rounded text-sm font-medium">
+                                        {variant.subject}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">Email Body</label>
+                                      <Textarea
+                                        className="w-full h-48 text-sm"
+                                        value={variant.body}
+                                        readOnly
+                                      />
+                                    </div>
+                                    <div className="text-xs text-gray-500">
+                                      <strong>Top Signal:</strong> {variant.topSignal}
+                                    </div>
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Action Buttons */}
+                        {outreachVariants.length > 0 && (
+                          <div className="flex gap-2 pt-4 border-t">
+                            <Button
+                              onClick={() => sendOutreach(selectedCompany, outreachVariants[selectedVariant])}
+                              className="bg-green-600 hover:bg-green-700"
+                            >
+                              <Mail className="w-4 h-4 mr-2" />
+                              Send Selected Variant
+                            </Button>
+                            <Button
+                              variant="outline"
+                              onClick={() => saveOutreachTemplate(selectedCompany, outreachVariants[selectedVariant])}
+                            >
+                              <Save className="w-4 h-4 mr-2" />
+                              Save Template
+                            </Button>
+                            <Button
+                              variant="outline"
+                              onClick={() => addToSequence(selectedCompany, outreachVariants[selectedVariant])}
+                            >
+                              <Calendar className="w-4 h-4 mr-2" />
+                              Add to Sequence
+                            </Button>
+                            <Button
+                              variant="outline"
+                              onClick={() => openCalendarModal(selectedCompany)}
+                            >
+                              <Clock className="w-4 h-4 mr-2" />
+                              Schedule Meeting
+                            </Button>
+                          </div>
+                        )}
+
+                        {/* Outreach Analytics */}
+                        {selectedCompany.outreachHistory && selectedCompany.outreachHistory.length > 0 && (
+                          <Card className="bg-gray-50">
+                            <CardHeader>
+                              <CardTitle className="text-lg">Previous Outreach Performance</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                              <div className="grid grid-cols-3 gap-4">
+                                <div className="text-center">
+                                  <div className="text-2xl font-bold text-blue-600">
+                                    {selectedCompany.outreachHistory.filter(o => o.status === 'sent').length}
+                                  </div>
+                                  <div className="text-sm text-gray-600">Sent</div>
+                                </div>
+                                <div className="text-center">
+                                  <div className="text-2xl font-bold text-green-600">
+                                    {selectedCompany.outreachHistory.filter(o => o.status === 'replied').length}
+                                  </div>
+                                  <div className="text-sm text-gray-600">Replied</div>
+                                </div>
+                                <div className="text-center">
+                                  <div className="text-2xl font-bold text-purple-600">
+                                    {selectedCompany.outreachHistory.filter(o => o.status === 'meeting').length}
+                                  </div>
+                                  <div className="text-sm text-gray-600">Meetings</div>
+                                </div>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </TabsContent>
+
+                  <TabsContent value="activity">
+                    <div className="space-y-6">
+                      {/* Active Sequence */}
+                      {(() => {
+                        const activeSequence = getActiveSequenceForCompany(selectedCompany.id);
+                        return activeSequence ? (
+                          <Card className="border-blue-200 bg-blue-50">
+                            <CardHeader>
+                              <CardTitle className="flex items-center justify-between">
+                                <span className="flex items-center gap-2">
+                                  <Calendar className="w-5 h-5 text-blue-600" />
+                                  Active 3-Touch Sequence
+                                </span>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => cancelSequence(activeSequence.id)}
+                                  className="text-red-600 border-red-300 hover:bg-red-50"
+                                >
+                                  Cancel Sequence
+                                </Button>
+                              </CardTitle>
+                              <p className="text-sm text-blue-700">
+                                Started {new Date(activeSequence.createdAt).toLocaleDateString()} •
+                                Persona: {activeSequence.persona} •
+                                Tone: {activeSequence.tone}
+                              </p>
+                            </CardHeader>
+                            <CardContent>
+                              <div className="space-y-4">
+                                {activeSequence.touches.map((touch, index) => (
+                                  <div key={touch.id} className="flex items-center gap-4 p-3 bg-white rounded-lg border">
+                                    <div className="flex-shrink-0">
+                                      {touch.completed ? (
+                                        <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
+                                          <CheckCircle2 className="w-4 h-4 text-white" />
+                                        </div>
+                                      ) : (
+                                        <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center text-sm font-medium">
+                                          {touch.id}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="flex-1">
+                                      <div className="flex items-center justify-between">
+                                        <h4 className="font-medium">{touch.title}</h4>
+                                        <div className="flex items-center gap-2">
+                                          {touch.type === 'email' ? (
+                                            <Mail className="w-4 h-4 text-gray-500" />
+                                          ) : (
+                                            <Globe className="w-4 h-4 text-blue-500" />
+                                          )}
+                                          <span className="text-sm text-gray-600">
+                                            Due: {new Date(touch.dueDate).toLocaleDateString()}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      <p className="text-sm text-gray-600 mt-1">
+                                        {formatSignalType(touch.signal.type)}: {touch.signal.details}
+                                      </p>
+                                      {touch.completed ? (
+                                        <p className="text-xs text-green-600 mt-1">
+                                          ✓ Completed {new Date(touch.completedAt).toLocaleDateString()}
+                                        </p>
+                                      ) : (
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="mt-2"
+                                          onClick={() => markTouchComplete(activeSequence.id, touch.id)}
+                                        >
+                                          Mark Complete
+                                        </Button>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </CardContent>
+                          </Card>
+                        ) : null;
+                      })()}
+
+                      {/* Engagement Timeline */}
+                      <Card>
+                        <CardHeader>
+                          <CardTitle>Engagement Timeline</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-4">
+                            {renderActivityTimeline(selectedCompany)}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="instructions">
+                    <div className="space-y-6">
+                      {/* Getting Started */}
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="flex items-center gap-2">
+                            <Target className="w-5 h-5 text-blue-600" />
+                            INP² Cybersecurity Lead Generator - User Guide
+                          </CardTitle>
+                          <p className="text-sm text-gray-600">
+                            Your complete guide to generating high-quality cybersecurity leads and booking meetings faster
+                          </p>
+                        </CardHeader>
+                        <CardContent className="space-y-6">
+                          {/* Overview Section */}
+                          <div>
+                            <h3 className="text-lg font-semibold mb-3 text-gray-800">🎯 What This Tool Does</h3>
+                            <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                              <p className="text-sm text-blue-800 mb-2">
+                                <strong>The fastest path from intent signal → meeting for cybersecurity services.</strong>
+                              </p>
+                              <ul className="text-sm text-blue-700 space-y-1 ml-4">
+                                <li>• Collect and enrich company leads with security-relevant signals</li>
+                                <li>• Prioritize prospects transparently with AI-powered scoring</li>
+                                <li>• Generate contextual outreach targeted to executive buyers (CISO/CTO/COO/CFO)</li>
+                                <li>• Track engagement and automate follow-up sequences</li>
+                              </ul>
+                            </div>
+                          </div>
+
+                          {/* Success Metrics */}
+                          <div>
+                            <h3 className="text-lg font-semibold mb-3 text-gray-800">📊 Target Success Metrics</h3>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                              <div className="bg-green-50 p-3 rounded-lg border border-green-200">
+                                <div className="text-2xl font-bold text-green-600">≥10%</div>
+                                <div className="text-xs text-green-700">Reply Rate</div>
+                              </div>
+                              <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
+                                <div className="text-2xl font-bold text-blue-600">≥5%</div>
+                                <div className="text-xs text-blue-700">Meeting Rate</div>
+                              </div>
+                              <div className="bg-purple-50 p-3 rounded-lg border border-purple-200">
+                                <div className="text-2xl font-bold text-purple-600">≤10min</div>
+                                <div className="text-xs text-purple-700">First Qualified List</div>
+                              </div>
+                              <div className="bg-orange-50 p-3 rounded-lg border border-orange-200">
+                                <div className="text-2xl font-bold text-orange-600">60%</div>
+                                <div className="text-xs text-orange-700">Time Saved</div>
+                              </div>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      {/* Tab-by-Tab Guide */}
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="flex items-center gap-2">
+                            <List className="w-5 h-5 text-green-600" />
+                            Complete Tab-by-Tab Guide
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-8">
+
+                          {/* Overview Tab */}
+                          <div className="border-l-4 border-blue-500 pl-4">
+                            <h4 className="text-lg font-semibold text-blue-700 mb-2">1. Overview Tab</h4>
+                            <p className="text-sm text-gray-600 mb-3">
+                              <strong>Purpose:</strong> Get a complete 360° view of your selected company with AI-powered insights and decision cards.
+                            </p>
+                            <div className="space-y-2 text-sm">
+                              <div><strong>Decision Cards:</strong> See "Why Now?", "What We'd Do First", and "Risks of Waiting" - use these talking points in conversations</div>
+                              <div><strong>Company Info:</strong> Basic details, employee count, revenue, industry classification</div>
+                              <div><strong>Security Score:</strong> AI-calculated priority score (1-100) with explanation of factors</div>
+                              <div><strong>Tech Stack:</strong> Current technology infrastructure and security tools in use</div>
+                              <div><strong>Security Concerns:</strong> Identified vulnerabilities and compliance gaps</div>
+                              <div><strong>Recent Activity:</strong> Latest news, funding, executive changes, and business events</div>
+                            </div>
+                            <div className="bg-yellow-50 p-3 rounded mt-3 border border-yellow-200">
+                              <p className="text-xs text-yellow-800"><strong>💡 Pro Tip:</strong> Use the decision cards as conversation starters - they're designed for executive-level discussions.</p>
+                            </div>
+                          </div>
+
+                          {/* Contacts Tab */}
+                          <div className="border-l-4 border-green-500 pl-4">
+                            <h4 className="text-lg font-semibold text-green-700 mb-2">2. Contacts Tab</h4>
+                            <p className="text-sm text-gray-600 mb-3">
+                              <strong>Purpose:</strong> Access verified executive contacts with direct email addresses and phone numbers.
+                            </p>
+                            <div className="space-y-2 text-sm">
+                              <div><strong>Executive Contacts:</strong> CISO, CTO, COO, CFO with verified business emails</div>
+                              <div><strong>Contact Information:</strong> Direct phone numbers, LinkedIn profiles, email addresses</div>
+                              <div><strong>Role Context:</strong> Each contact shows their specific cybersecurity responsibilities</div>
+                              <div><strong>Best Contact Time:</strong> Suggested optimal outreach timing based on role and company size</div>
+                            </div>
+                            <div className="bg-green-50 p-3 rounded mt-3 border border-green-200">
+                              <p className="text-xs text-green-800"><strong>✅ Best Practice:</strong> Start with CISO for technical discussions, COO for operational risk, CFO for budget/compliance conversations.</p>
+                            </div>
+                          </div>
+
+                          {/* Intelligence Tab */}
+                          <div className="border-l-4 border-purple-500 pl-4">
+                            <h4 className="text-lg font-semibold text-purple-700 mb-2">3. Intelligence Tab</h4>
+                            <p className="text-sm text-gray-600 mb-3">
+                              <strong>Purpose:</strong> Deep dive into recent news, funding events, and business intelligence that creates urgency.
+                            </p>
+                            <div className="space-y-2 text-sm">
+                              <div><strong>Recent News:</strong> Company announcements, press releases, industry coverage</div>
+                              <div><strong>Funding Events:</strong> Recent investments, acquisitions, IPO preparations</div>
+                              <div><strong>Regulatory Changes:</strong> Upcoming compliance deadlines and requirements</div>
+                              <div><strong>Competitive Intelligence:</strong> Market position and competitive pressures</div>
+                              <div><strong>Growth Indicators:</strong> Hiring patterns, office expansions, new market entries</div>
+                            </div>
+                            <div className="bg-purple-50 p-3 rounded mt-3 border border-purple-200">
+                              <p className="text-xs text-purple-800"><strong>🔍 Usage Tip:</strong> Reference specific news items in your outreach to show you're informed about their business.</p>
+                            </div>
+                          </div>
+
+                          {/* Signals Tab */}
+                          <div className="border-l-4 border-orange-500 pl-4">
+                            <h4 className="text-lg font-semibold text-orange-700 mb-2">4. Signals Tab</h4>
+                            <p className="text-sm text-gray-600 mb-3">
+                              <strong>Purpose:</strong> View AI-detected intent signals that indicate when a company is ready to buy cybersecurity services.
+                            </p>
+                            <div className="space-y-2 text-sm">
+                              <div><strong>Breach Proximity:</strong> Recent security incidents affecting their vendors or industry</div>
+                              <div><strong>Regulatory Countdown:</strong> Upcoming compliance deadlines (SOC 2, GDPR, etc.)</div>
+                              <div><strong>Executive Changes:</strong> New CISO/CTO hires indicating security program changes</div>
+                              <div><strong>Insurance Renewal:</strong> Cyber insurance renewal windows requiring security improvements</div>
+                              <div><strong>Attack Surface:</strong> Detected security configuration regressions</div>
+                              <div><strong>AI Governance Gaps:</strong> Companies using AI without proper security governance</div>
+                            </div>
+                            <div className="bg-orange-50 p-3 rounded mt-3 border border-orange-200">
+                              <p className="text-xs text-orange-800"><strong>⚡ Power Move:</strong> Lead with the highest-scoring signal in your outreach - it's your "why now" moment.</p>
+                            </div>
+                          </div>
+
+                          {/* Outreach Tab */}
+                          <div className="border-l-4 border-red-500 pl-4">
+                            <h4 className="text-lg font-semibold text-red-700 mb-2">5. Outreach Tab - Email Generation & Templates</h4>
+                            <p className="text-sm text-gray-600 mb-3">
+                              <strong>Purpose:</strong> Generate personalized, contextual emails that get responses using AI-powered personas and signals.
+                            </p>
+
+                            <div className="space-y-4">
+                              <div>
+                                <h5 className="font-semibold text-gray-700 mb-2">🎭 Persona Selection</h5>
+                                <div className="space-y-1 text-sm">
+                                  <div><strong>CISO:</strong> Technical security focus, mentions specific tools and frameworks</div>
+                                  <div><strong>COO:</strong> Operational risk and business continuity emphasis</div>
+                                  <div><strong>CFO:</strong> Budget impact, compliance costs, ROI-focused messaging</div>
+                                </div>
+                              </div>
+
+                              <div>
+                                <h5 className="font-semibold text-gray-700 mb-2">📝 Communication Tones</h5>
+                                <div className="space-y-1 text-sm">
+                                  <div><strong>Formal:</strong> Executive-level language, professional tone</div>
+                                  <div><strong>Plain:</strong> Direct and clear, no jargon</div>
+                                  <div><strong>Urgent:</strong> Time-sensitive messaging for high-priority signals</div>
+                                </div>
+                              </div>
+
+                              <div>
+                                <h5 className="font-semibold text-gray-700 mb-2">📧 Email Templates & Usage</h5>
+                                <div className="bg-gray-50 p-4 rounded-lg border space-y-3">
+                                  <div>
+                                    <strong className="text-sm">Template Tokens (Auto-filled):</strong>
+                                    <div className="text-xs text-gray-600 ml-4 mt-1 space-y-1">
+                                      <div>• <code>{'{company}'}</code> - Company name</div>
+                                      <div>• <code>{'{exec_title}'}</code> - Recipient's job title</div>
+                                      <div>• <code>{'{recent_news.title}'}</code> - Latest company news</div>
+                                      <div>• <code>{'{top_signal}'}</code> - Highest-scoring intent signal</div>
+                                      <div>• <code>{'{tech.0}'}</code> - Primary technology stack item</div>
+                                      <div>• <code>{'{next_week_slots}'}</code> - Available meeting times</div>
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <strong className="text-sm">A/B Testing:</strong>
+                                    <div className="text-xs text-gray-600 ml-4 mt-1">
+                                      Generate 2 variants with different subject lines and save your chosen version for tracking performance.
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div>
+                                <h5 className="font-semibold text-gray-700 mb-2">📬 Send Email & Schedule Meeting</h5>
+                                <div className="space-y-2 text-sm">
+                                  <div><strong>Send Email:</strong> Integrates with your email provider to send directly from the platform</div>
+                                  <div><strong>Schedule Meeting:</strong> Automatically includes calendar booking links in emails</div>
+                                  <div><strong>Meeting Types:</strong> 15-min discovery calls, 30-min demos, or 60-min assessments</div>
+                                  <div><strong>Follow-up Automation:</strong> Sets reminders and sequences based on recipient response</div>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="bg-red-50 p-3 rounded mt-3 border border-red-200">
+                              <p className="text-xs text-red-800"><strong>🎯 Success Formula:</strong> Right Persona + Right Signal + Right Tone = Higher Reply Rates</p>
+                            </div>
+                          </div>
+
+                          {/* Activity Tab */}
+                          <div className="border-l-4 border-indigo-500 pl-4">
+                            <h4 className="text-lg font-semibold text-indigo-700 mb-2">6. Activity Tab - Sequences & Tracking</h4>
+                            <p className="text-sm text-gray-600 mb-3">
+                              <strong>Purpose:</strong> Track engagement history and manage automated follow-up sequences.
+                            </p>
+                            <div className="space-y-2 text-sm">
+                              <div><strong>3-Touch Sequences:</strong> Email → LinkedIn → Follow-up email over 10 days</div>
+                              <div><strong>Engagement Timeline:</strong> Complete history of all interactions with the company</div>
+                              <div><strong>Response Tracking:</strong> Monitor opens, clicks, replies, and meeting bookings</div>
+                              <div><strong>Sequence Management:</strong> Mark touches complete, cancel sequences, adjust timing</div>
+                              <div><strong>Performance Analytics:</strong> Track conversion rates by persona, tone, and signal type</div>
+                            </div>
+                            <div className="bg-indigo-50 p-3 rounded mt-3 border border-indigo-200">
+                              <p className="text-xs text-indigo-800"><strong>📈 Optimization:</strong> Each touch references a different top signal to maintain relevance throughout the sequence.</p>
+                            </div>
+                          </div>
+
+                        </CardContent>
+                      </Card>
+
+                      {/* Workflow Guide */}
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="flex items-center gap-2">
+                            <Clock className="w-5 h-5 text-purple-600" />
+                            Recommended Workflow
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-4">
+                            <div className="flex items-start gap-3">
+                              <div className="w-8 h-8 bg-blue-500 text-white rounded-full flex items-center justify-center text-sm font-bold">1</div>
+                              <div>
+                                <h4 className="font-semibold">Generate & Filter Leads</h4>
+                                <p className="text-sm text-gray-600">Use "Generate Leads" panel to fetch companies. Filter by industry, size, and priority score.</p>
+                              </div>
+                            </div>
+                            <div className="flex items-start gap-3">
+                              <div className="w-8 h-8 bg-green-500 text-white rounded-full flex items-center justify-center text-sm font-bold">2</div>
+                              <div>
+                                <h4 className="font-semibold">Analyze High-Priority Prospects</h4>
+                                <p className="text-sm text-gray-600">Click on Critical/High priority leads. Review Overview → Signals → Intelligence tabs.</p>
+                              </div>
+                            </div>
+                            <div className="flex items-start gap-3">
+                              <div className="w-8 h-8 bg-purple-500 text-white rounded-full flex items-center justify-center text-sm font-bold">3</div>
+                              <div>
+                                <h4 className="font-semibold">Identify Key Contacts</h4>
+                                <p className="text-sm text-gray-600">Check Contacts tab for the right executive. Match persona to their role and responsibilities.</p>
+                              </div>
+                            </div>
+                            <div className="flex items-start gap-3">
+                              <div className="w-8 h-8 bg-orange-500 text-white rounded-full flex items-center justify-center text-sm font-bold">4</div>
+                              <div>
+                                <h4 className="font-semibold">Craft Personalized Outreach</h4>
+                                <p className="text-sm text-gray-600">Use Outreach tab to generate personalized emails. Choose appropriate persona and tone.</p>
+                              </div>
+                            </div>
+                            <div className="flex items-start gap-3">
+                              <div className="w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center text-sm font-bold">5</div>
+                              <div>
+                                <h4 className="font-semibold">Send & Schedule</h4>
+                                <p className="text-sm text-gray-600">Send email directly from platform and include calendar booking link for immediate meeting scheduling.</p>
+                              </div>
+                            </div>
+                            <div className="flex items-start gap-3">
+                              <div className="w-8 h-8 bg-indigo-500 text-white rounded-full flex items-center justify-center text-sm font-bold">6</div>
+                              <div>
+                                <h4 className="font-semibold">Track & Follow Up</h4>
+                                <p className="text-sm text-gray-600">Monitor Activity tab for responses. Use automated sequences for systematic follow-up.</p>
+                              </div>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      {/* Best Practices */}
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="flex items-center gap-2">
+                            <Crown className="w-5 h-5 text-yellow-600" />
+                            Best Practices & Pro Tips
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div className="grid md:grid-cols-2 gap-6">
+                            <div>
+                              <h4 className="font-semibold text-green-700 mb-2">✅ Do's</h4>
+                              <ul className="text-sm space-y-1 text-gray-700">
+                                <li>• Start with Critical/High priority leads</li>
+                                <li>• Reference specific signals in your outreach</li>
+                                <li>• Use decision cards as conversation starters</li>
+                                <li>• Test different personas for the same company</li>
+                                <li>• Follow up within 48 hours of initial contact</li>
+                                <li>• Include clear meeting booking links</li>
+                                <li>• Track A/B performance to improve messaging</li>
+                              </ul>
+                            </div>
+                            <div>
+                              <h4 className="font-semibold text-red-700 mb-2">❌ Don'ts</h4>
+                              <ul className="text-sm space-y-1 text-gray-700">
+                                <li>• Don't ignore Low priority leads completely</li>
+                                <li>• Don't use generic, non-personalized emails</li>
+                                <li>• Don't overload emails with multiple signals</li>
+                                <li>• Don't skip the Intelligence tab research</li>
+                                <li>• Don't send sequences without monitoring responses</li>
+                                <li>• Don't forget to update lead status after contact</li>
+                                <li>• Don't use urgent tone unless signal supports it</li>
+                              </ul>
+                            </div>
+                          </div>
+
+                          <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200 mt-4">
+                            <h5 className="font-semibold text-yellow-800 mb-2">🏆 Advanced Strategies</h5>
+                            <ul className="text-sm text-yellow-700 space-y-1">
+                              <li>• <strong>Signal Stacking:</strong> When a company has multiple high-scoring signals, mention 2-3 in your email</li>
+                              <li>• <strong>Persona Rotation:</strong> If CISO doesn't respond, try COO with operational risk angle</li>
+                              <li>• <strong>News Tie-ins:</strong> Always connect cybersecurity needs to their recent business news</li>
+                              <li>• <strong>Compliance Urgency:</strong> Use regulatory countdown signals for CFO outreach</li>
+                              <li>• <strong>Vendor Risk:</strong> Reference breach proximity signals when targeting CISOs</li>
+                            </ul>
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      {/* Contact Memo Templates */}
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="flex items-center gap-2">
+                            <Eye className="w-5 h-5 text-blue-600" />
+                            Contact Memo Templates
+                          </CardTitle>
+                          <p className="text-sm text-gray-600">Use these templates to document your interactions and next steps</p>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div className="space-y-4">
+                            <div className="border rounded-lg p-4 bg-gray-50">
+                              <h5 className="font-semibold mb-2">Initial Contact Memo</h5>
+                              <div className="bg-white p-3 rounded border text-sm font-mono">
+                                <div className="space-y-1">
+                                  <div><strong>Company:</strong> {'{company_name}'}</div>
+                                  <div><strong>Contact:</strong> {'{exec_name}'} - {'{exec_title}'}</div>
+                                  <div><strong>Contact Method:</strong> Email / Phone / LinkedIn</div>
+                                  <div><strong>Primary Signal:</strong> {'{top_signal_type}'} - {'{signal_details}'}</div>
+                                  <div><strong>Persona Used:</strong> {'{persona}'} / {'{tone}'}</div>
+                                  <div><strong>Key Message:</strong> [Brief summary of main talking points]</div>
+                                  <div><strong>Next Steps:</strong> [Expected response timeline and follow-up plan]</div>
+                                  <div><strong>Meeting Link Sent:</strong> Yes/No</div>
+                                  <div><strong>Notes:</strong> [Additional context or observations]</div>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="border rounded-lg p-4 bg-gray-50">
+                              <h5 className="font-semibold mb-2">Follow-up Memo</h5>
+                              <div className="bg-white p-3 rounded border text-sm font-mono">
+                                <div className="space-y-1">
+                                  <div><strong>Follow-up #:</strong> [1, 2, 3]</div>
+                                  <div><strong>Days Since Last Contact:</strong> [X days]</div>
+                                  <div><strong>Response Received:</strong> Yes/No</div>
+                                  <div><strong>Response Type:</strong> Interested / Not Now / Objection / Meeting Booked</div>
+                                  <div><strong>New Signal Used:</strong> {'{secondary_signal}'}</div>
+                                  <div><strong>Adjusted Approach:</strong> [Any changes in messaging or persona]</div>
+                                  <div><strong>Objection/Concern:</strong> [If any raised]</div>
+                                  <div><strong>Next Action:</strong> [Specific next step and timeline]</div>
+                                  <div><strong>Sequence Status:</strong> Continue / Pause / End</div>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="border rounded-lg p-4 bg-gray-50">
+                              <h5 className="font-semibold mb-2">Meeting Booked Memo</h5>
+                              <div className="bg-white p-3 rounded border text-sm font-mono">
+                                <div className="space-y-1">
+                                  <div><strong>Meeting Type:</strong> Discovery / Demo / Assessment</div>
+                                  <div><strong>Date & Time:</strong> [Scheduled date/time]</div>
+                                  <div><strong>Duration:</strong> 15min / 30min / 60min</div>
+                                  <div><strong>Attendees:</strong> [Who will be joining]</div>
+                                  <div><strong>Meeting Focus:</strong> [Primary topics to cover]</div>
+                                  <div><strong>Prep Needed:</strong> [Research/materials to prepare]</div>
+                                  <div><strong>Success Criteria:</strong> [What defines a successful meeting]</div>
+                                  <div><strong>Follow-up Plan:</strong> [Post-meeting next steps]</div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="bg-blue-50 p-3 rounded border border-blue-200">
+                            <p className="text-xs text-blue-800">
+                              <strong>💡 Tip:</strong> Copy these templates into your CRM or note-taking system. Update after each interaction to maintain detailed prospect intelligence.
+                            </p>
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                    </div>
+                  </TabsContent>
+                </Tabs>
+              </div>
+            )}
+          </div>
+        </div>
+        )
+      )}
+
+      {/* Save Segment Modal */}
+      {showSaveSegmentModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <Card className="w-full max-w-md mx-4">
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <span>Save Segment</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowSaveSegmentModal(false)}
+                >
+                  ×
+                </Button>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">Segment Name</label>
+                <Input
+                  placeholder="e.g., US Healthcare High Priority"
+                  value={segmentName}
+                  onChange={(e) => setSegmentName(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && saveCurrentSegment()}
+                />
+              </div>
+
+              <div className="text-sm text-gray-600">
+                <h4 className="font-medium mb-2">Current Filters:</h4>
+                <ul className="space-y-1">
+                  {searchTerm && <li>• Search: "{searchTerm}"</li>}
+                  {filterIndustry !== 'all' && <li>• Industry: {filterIndustry}</li>}
+                  {filterState !== 'all' && <li>• State: {filterState}</li>}
+                  {signalFilter !== 'all' && <li>• Signal: {signalFilter}</li>}
+                  {severityFilter !== 'all' && <li>• Severity: {severityFilter}</li>}
+                </ul>
+                <p className="mt-2">
+                  Will save {getFilteredCompanies().length} companies with average score of{' '}
+                  {getFilteredCompanies().length > 0
+                    ? Math.round(getFilteredCompanies().reduce((sum, c) => sum + c.leadScore, 0) / getFilteredCompanies().length)
+                    : 0}
+                </p>
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  onClick={saveCurrentSegment}
+                  disabled={!segmentName.trim()}
+                  className="flex-1"
+                >
+                  Save Segment
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowSaveSegmentModal(false)}
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Email Composition Modal */}
+      {showEmailModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <Card className="w-full max-w-2xl mx-4 max-h-[90vh] overflow-auto">
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <span>Compose Email</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowEmailModal(false)}
+                >
+                  ✕
+                </Button>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Persona and Tone Selection */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Target Persona</label>
+                  <select
+                    className="w-full px-3 py-2 border rounded-md"
+                    value={emailData.persona}
+                    onChange={(e) => {
+                      const newPersona = e.target.value;
+                      setEmailData(prev => ({
+                        ...prev,
+                        persona: newPersona,
+                        body: generatePersonalizedEmail(selectedCompany, newPersona, prev.tone)
+                      }));
+                    }}
+                  >
+                    <option value="CISO">CISO (Security Focus)</option>
+                    <option value="CTO">CTO (Technology Focus)</option>
+                    <option value="COO">COO (Operations Focus)</option>
+                    <option value="CFO">CFO (Cost Focus)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Tone</label>
+                  <select
+                    className="w-full px-3 py-2 border rounded-md"
+                    value={emailData.tone}
+                    onChange={(e) => {
+                      const newTone = e.target.value;
+                      setEmailData(prev => ({
+                        ...prev,
+                        tone: newTone,
+                        body: generatePersonalizedEmail(selectedCompany, prev.persona, newTone)
+                      }));
+                    }}
+                  >
+                    <option value="professional">Professional</option>
+                    <option value="casual">Casual</option>
+                    <option value="urgent">Urgent</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Email Fields */}
+              <div>
+                <label className="block text-sm font-medium mb-1">To</label>
+                <Input
+                  type="email"
+                  value={emailData.to}
+                  onChange={(e) => setEmailData(prev => ({ ...prev, to: e.target.value }))}
+                  placeholder="recipient@company.com"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Subject</label>
+                <Input
+                  value={emailData.subject}
+                  onChange={(e) => setEmailData(prev => ({ ...prev, subject: e.target.value }))}
+                  placeholder="Email subject"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Message</label>
+                <Textarea
+                  value={emailData.body}
+                  onChange={(e) => setEmailData(prev => ({ ...prev, body: e.target.value }))}
+                  rows={12}
+                  className="resize-none"
+                  placeholder="Email content"
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-2 justify-end">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowEmailModal(false)}
+                  disabled={emailSending}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={sendEmail}
+                  disabled={emailSending || !emailData.to || !emailData.subject}
+                >
+                  {emailSending ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Sending...
+                    </>
+                  ) : (
+                    <>
+                      <Mail className="w-4 h-4 mr-2" />
+                      Send Email
+                    </>
+                  )}
+                </Button>
+              </div>
+
+              {/* Email Preview Info */}
+              <div className="text-xs text-gray-500 border-t pt-2">
+                <p><strong>Company:</strong> {selectedCompany?.name}</p>
+                <p><strong>Industry:</strong> {selectedCompany?.industry}</p>
+                <p><strong>Size:</strong> {selectedCompany?.employees} employees</p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Calendar Scheduler Modal */}
+      {showCalendarModal && selectedCompany && (
+        <CalendarScheduler
+          lead={selectedCompany}
+          onScheduled={handleMeetingScheduled}
+          onClose={() => setShowCalendarModal(false)}
+          netlifyAPI={netlifyAPI}
+        />
+      )}
+
+      {/* Bulk Email Modal */}
+      {showBulkEmailModal && (
+        <BulkEmail
+          companies={filteredCompanies}
+          onClose={() => setShowBulkEmailModal(false)}
+          netlifyAPI={netlifyAPI}
+        />
+      )}
+
+      {/* Analytics Modal */}
+      {showAnalyticsModal && (
+        <Analytics
+          companies={filteredCompanies}
+          onClose={() => setShowAnalyticsModal(false)}
+        />
+      )}
+
+      {/* Sequence Modal */}
+      {showSequenceModal && selectedSequenceCompany && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <Card className="w-full max-w-lg mx-4">
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <span>Create 3-Touch Sequence</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowSequenceModal(false)}
+                >
+                  ×
+                </Button>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                <h4 className="font-medium text-blue-900 mb-2">Sequence Overview</h4>
+                <div className="space-y-2 text-sm text-blue-800">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-4 h-4" />
+                    <span><strong>Touch 1:</strong> Initial Email (Today)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Globe className="w-4 h-4" />
+                    <span><strong>Touch 2:</strong> LinkedIn Note (+4 days)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Mail className="w-4 h-4" />
+                    <span><strong>Touch 3:</strong> Follow-up Email (+10 days)</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <h4 className="font-medium mb-2">Company: {selectedSequenceCompany.name}</h4>
+                <p className="text-sm text-gray-600">
+                  Each touch will reference different signals based on your selected persona and tone.
+                  The sequence will automatically space communications over 10 days.
+                </p>
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => createSequence(selectedSequenceCompany, outreachVariants[selectedVariant])}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700"
+                  disabled={!outreachVariants.length}
+                >
+                  <Calendar className="w-4 h-4 mr-2" />
+                  Create Sequence
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowSequenceModal(false)}
+                >
+                  Cancel
+                </Button>
+              </div>
+
+              {!outreachVariants.length && (
+                <p className="text-sm text-amber-600 bg-amber-50 p-3 rounded">
+                  Please generate outreach variants first in the Outreach tab.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Memoized Lead Card Component for better performance
+const MemoizedLeadCard = memo(({ company, index, onSelect, getScoreColor, getPriorityColor }) => {
+  return (
+    <Card
+      key={company.id}
+      className="cursor-pointer transition-all duration-200 hover:shadow-md hover:scale-[1.02] border-l-4"
+      style={{ borderLeftColor: company.priority === 'Critical' ? '#ef4444' : company.priority === 'High' ? '#f97316' : '#eab308' }}
+      onClick={() => onSelect(company)}
+    >
+      <CardContent className="p-4">
+        <div className="flex items-center justify-between mb-2">
+          <Badge className={getPriorityColor(company.priority)}>
+            {company.priority}
+          </Badge>
+          <div className="flex items-center gap-2">
+            <div className={`w-3 h-3 rounded-full ${getScoreColor(company.leadScore)}`}></div>
+            <span className="font-bold text-lg">{company.leadScore}</span>
+          </div>
+        </div>
+        <h3 className="font-semibold text-lg mb-1 truncate">{company.name}</h3>
+        <p className="text-sm text-gray-600 mb-2">{company.industry} • {company.employees} employees</p>
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-gray-500">{company.location}</span>
+          <Badge variant="outline" className="text-xs">
+            {company.status}
+          </Badge>
+        </div>
+      </CardContent>
+    </Card>
+  );
+});
+
+MemoizedLeadCard.displayName = 'MemoizedLeadCard';
+
+// Loading Skeleton Components
+const LeadCardSkeleton = () => (
+  <Card className="border-l-4 border-l-gray-300">
+    <CardContent className="p-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="w-16 h-5 bg-gray-200 rounded animate-pulse"></div>
+        <div className="w-8 h-8 bg-gray-200 rounded animate-pulse"></div>
+      </div>
+      <div className="w-3/4 h-6 bg-gray-200 rounded mb-1 animate-pulse"></div>
+      <div className="w-1/2 h-4 bg-gray-200 rounded mb-2 animate-pulse"></div>
+      <div className="flex items-center justify-between">
+        <div className="w-1/3 h-4 bg-gray-200 rounded animate-pulse"></div>
+        <div className="w-16 h-5 bg-gray-200 rounded animate-pulse"></div>
+      </div>
+    </CardContent>
+  </Card>
+);
+
+const TabContentSkeleton = () => (
+  <div className="space-y-4">
+    <div className="w-full h-6 bg-gray-200 rounded animate-pulse"></div>
+    <div className="space-y-2">
+      {[...Array(5)].map((_, i) => (
+        <div key={i} className="w-full h-4 bg-gray-200 rounded animate-pulse"></div>
+      ))}
+    </div>
+  </div>
+);
+
+// Main dashboard wrapper with error boundary and performance optimizations
+const DashboardWrapper = () => {
+  return (
+    <ErrorBoundary>
+      <EnhancedLeadGenDashboard />
+    </ErrorBoundary>
+  );
+};
+
+export default DashboardWrapper;

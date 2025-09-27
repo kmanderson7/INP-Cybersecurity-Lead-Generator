@@ -1,0 +1,490 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - img "INP² Security Logo" [ref=e6]
+      - generic [ref=e7]:
+        - heading "Cybersecurity Lead Generation Dashboard" [level=1] [ref=e8]
+        - paragraph [ref=e9]: INP² Security Solutions
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - button "Executive" [ref=e12]:
+          - img [ref=e13]
+          - text: Executive
+        - button "Detailed" [active] [ref=e15]:
+          - img [ref=e16]
+          - text: Detailed
+      - button "Generate Leads" [ref=e17]:
+        - img [ref=e18]
+        - text: Generate Leads
+      - button "Apollo API" [ref=e23]:
+        - img [ref=e24]
+        - text: Apollo API
+      - button "Security News" [ref=e27]:
+        - img [ref=e28]
+        - text: Security News
+      - button "Bulk Email" [ref=e30]:
+        - img [ref=e31]
+        - text: Bulk Email
+      - button "Analytics" [ref=e34]:
+        - img [ref=e35]
+        - text: Analytics
+  - generic [ref=e38]:
+    - generic [ref=e39]:
+      - img [ref=e40]
+      - textbox "Search companies..." [ref=e43]
+    - combobox [ref=e44]:
+      - option "All Industries" [selected]
+      - option "Software"
+      - option "Healthcare"
+      - option "Finance"
+    - button "More Filters" [ref=e45]:
+      - img [ref=e46]
+      - text: More Filters
+  - generic [ref=e48]:
+    - generic [ref=e49]:
+      - heading "Leads (45)" [level=3] [ref=e50]
+      - generic [ref=e52] [cursor=pointer]:
+        - generic [ref=e53] [cursor=pointer]:
+          - heading "TechCorp Solutions" [level=4] [ref=e54] [cursor=pointer]
+          - generic [ref=e55] [cursor=pointer]: High
+        - paragraph [ref=e56] [cursor=pointer]: Real Estate • 1811 employees
+        - generic [ref=e57] [cursor=pointer]:
+          - generic [ref=e60] [cursor=pointer]: 61/100
+          - generic [ref=e61] [cursor=pointer]: Demo Scheduled
+      - generic [ref=e63] [cursor=pointer]:
+        - generic [ref=e64] [cursor=pointer]:
+          - heading "HealthFirst Medical" [level=4] [ref=e65] [cursor=pointer]
+          - generic [ref=e66] [cursor=pointer]: Medium
+        - paragraph [ref=e67] [cursor=pointer]: Manufacturing • 514 employees
+        - generic [ref=e68] [cursor=pointer]:
+          - generic [ref=e71] [cursor=pointer]: 58/100
+          - generic [ref=e72] [cursor=pointer]: Follow-up
+      - generic [ref=e74] [cursor=pointer]:
+        - generic [ref=e75] [cursor=pointer]:
+          - heading "SecureBank Corp" [level=4] [ref=e76] [cursor=pointer]
+          - generic [ref=e77] [cursor=pointer]: Low
+        - paragraph [ref=e78] [cursor=pointer]: Education • 1512 employees
+        - generic [ref=e79] [cursor=pointer]:
+          - generic [ref=e82] [cursor=pointer]: 28/100
+          - generic [ref=e83] [cursor=pointer]: Demo Scheduled
+      - generic [ref=e85] [cursor=pointer]:
+        - generic [ref=e86] [cursor=pointer]:
+          - heading "ManuFacture Pro" [level=4] [ref=e87] [cursor=pointer]
+          - generic [ref=e88] [cursor=pointer]: Low
+        - paragraph [ref=e89] [cursor=pointer]: Government • 1927 employees
+        - generic [ref=e90] [cursor=pointer]:
+          - generic [ref=e93] [cursor=pointer]: 39/100
+          - generic [ref=e94] [cursor=pointer]: Contacted
+      - generic [ref=e96] [cursor=pointer]:
+        - generic [ref=e97] [cursor=pointer]:
+          - heading "RetailMax Inc" [level=4] [ref=e98] [cursor=pointer]
+          - generic [ref=e99] [cursor=pointer]: Low
+        - paragraph [ref=e100] [cursor=pointer]: Retail • 1301 employees
+        - generic [ref=e101] [cursor=pointer]:
+          - generic [ref=e104] [cursor=pointer]: 36/100
+          - generic [ref=e105] [cursor=pointer]: Contacted
+      - generic [ref=e107] [cursor=pointer]:
+        - generic [ref=e108] [cursor=pointer]:
+          - heading "EduTech Systems" [level=4] [ref=e109] [cursor=pointer]
+          - generic [ref=e110] [cursor=pointer]: Low
+        - paragraph [ref=e111] [cursor=pointer]: Manufacturing • 1123 employees
+        - generic [ref=e112] [cursor=pointer]:
+          - generic [ref=e115] [cursor=pointer]: 15/100
+          - generic [ref=e116] [cursor=pointer]: Contacted
+      - generic [ref=e118] [cursor=pointer]:
+        - generic [ref=e119] [cursor=pointer]:
+          - heading "GovSolutions Ltd" [level=4] [ref=e120] [cursor=pointer]
+          - generic [ref=e121] [cursor=pointer]: Low
+        - paragraph [ref=e122] [cursor=pointer]: Legal • 525 employees
+        - generic [ref=e123] [cursor=pointer]:
+          - generic [ref=e126] [cursor=pointer]: 23/100
+          - generic [ref=e127] [cursor=pointer]: Follow-up
+      - generic [ref=e129] [cursor=pointer]:
+        - generic [ref=e130] [cursor=pointer]:
+          - heading "EnergyFlow Corp" [level=4] [ref=e131] [cursor=pointer]
+          - generic [ref=e132] [cursor=pointer]: Medium
+        - paragraph [ref=e133] [cursor=pointer]: Software • 58 employees
+        - generic [ref=e134] [cursor=pointer]:
+          - generic [ref=e137] [cursor=pointer]: 53/100
+          - generic [ref=e138] [cursor=pointer]: Proposal Sent
+      - generic [ref=e140] [cursor=pointer]:
+        - generic [ref=e141] [cursor=pointer]:
+          - heading "PropertyTech Co" [level=4] [ref=e142] [cursor=pointer]
+          - generic [ref=e143] [cursor=pointer]: Medium
+        - paragraph [ref=e144] [cursor=pointer]: Energy • 181 employees
+        - generic [ref=e145] [cursor=pointer]:
+          - generic [ref=e148] [cursor=pointer]: 43/100
+          - generic [ref=e149] [cursor=pointer]: Contacted
+      - generic [ref=e151] [cursor=pointer]:
+        - generic [ref=e152] [cursor=pointer]:
+          - heading "LegalEase Partners" [level=4] [ref=e153] [cursor=pointer]
+          - generic [ref=e154] [cursor=pointer]: Medium
+        - paragraph [ref=e155] [cursor=pointer]: Healthcare • 826 employees
+        - generic [ref=e156] [cursor=pointer]:
+          - generic [ref=e159] [cursor=pointer]: 58/100
+          - generic [ref=e160] [cursor=pointer]: Contacted
+      - generic [ref=e162] [cursor=pointer]:
+        - generic [ref=e163] [cursor=pointer]:
+          - heading "DataDriven Inc" [level=4] [ref=e164] [cursor=pointer]
+          - generic [ref=e165] [cursor=pointer]: Low
+        - paragraph [ref=e166] [cursor=pointer]: Legal • 579 employees
+        - generic [ref=e167] [cursor=pointer]:
+          - generic [ref=e170] [cursor=pointer]: 16/100
+          - generic [ref=e171] [cursor=pointer]: Proposal Sent
+      - generic [ref=e173] [cursor=pointer]:
+        - generic [ref=e174] [cursor=pointer]:
+          - heading "CloudFirst Systems" [level=4] [ref=e175] [cursor=pointer]
+          - generic [ref=e176] [cursor=pointer]: Low
+        - paragraph [ref=e177] [cursor=pointer]: Education • 106 employees
+        - generic [ref=e178] [cursor=pointer]:
+          - generic [ref=e181] [cursor=pointer]: 7/100
+          - generic [ref=e182] [cursor=pointer]: Contacted
+      - generic [ref=e184] [cursor=pointer]:
+        - generic [ref=e185] [cursor=pointer]:
+          - heading "CyberShield Corp" [level=4] [ref=e186] [cursor=pointer]
+          - generic [ref=e187] [cursor=pointer]: Critical
+        - paragraph [ref=e188] [cursor=pointer]: Education • 109 employees
+        - generic [ref=e189] [cursor=pointer]:
+          - generic [ref=e192] [cursor=pointer]: 93/100
+          - generic [ref=e193] [cursor=pointer]: Proposal Sent
+      - generic [ref=e195] [cursor=pointer]:
+        - generic [ref=e196] [cursor=pointer]:
+          - heading "InnovateLab" [level=4] [ref=e197] [cursor=pointer]
+          - generic [ref=e198] [cursor=pointer]: Low
+        - paragraph [ref=e199] [cursor=pointer]: Software • 1412 employees
+        - generic [ref=e200] [cursor=pointer]:
+          - generic [ref=e203] [cursor=pointer]: 16/100
+          - generic [ref=e204] [cursor=pointer]: Contacted
+      - generic [ref=e206] [cursor=pointer]:
+        - generic [ref=e207] [cursor=pointer]:
+          - heading "SmartManufacturing" [level=4] [ref=e208] [cursor=pointer]
+          - generic [ref=e209] [cursor=pointer]: Low
+        - paragraph [ref=e210] [cursor=pointer]: Manufacturing • 1989 employees
+        - generic [ref=e211] [cursor=pointer]:
+          - generic [ref=e214] [cursor=pointer]: 6/100
+          - generic [ref=e215] [cursor=pointer]: Contacted
+      - generic [ref=e217] [cursor=pointer]:
+        - generic [ref=e218] [cursor=pointer]:
+          - heading "DigitalHealth Plus" [level=4] [ref=e219] [cursor=pointer]
+          - generic [ref=e220] [cursor=pointer]: Medium
+        - paragraph [ref=e221] [cursor=pointer]: Healthcare • 1448 employees
+        - generic [ref=e222] [cursor=pointer]:
+          - generic [ref=e225] [cursor=pointer]: 57/100
+          - generic [ref=e226] [cursor=pointer]: Contacted
+      - generic [ref=e228] [cursor=pointer]:
+        - generic [ref=e229] [cursor=pointer]:
+          - heading "FinanceSecure LLC" [level=4] [ref=e230] [cursor=pointer]
+          - generic [ref=e231] [cursor=pointer]: High
+        - paragraph [ref=e232] [cursor=pointer]: Software • 1773 employees
+        - generic [ref=e233] [cursor=pointer]:
+          - generic [ref=e236] [cursor=pointer]: 64/100
+          - generic [ref=e237] [cursor=pointer]: Follow-up
+      - generic [ref=e239] [cursor=pointer]:
+        - generic [ref=e240] [cursor=pointer]:
+          - heading "BuildTech Solutions" [level=4] [ref=e241] [cursor=pointer]
+          - generic [ref=e242] [cursor=pointer]: Medium
+        - paragraph [ref=e243] [cursor=pointer]: Healthcare • 755 employees
+        - generic [ref=e244] [cursor=pointer]:
+          - generic [ref=e247] [cursor=pointer]: 43/100
+          - generic [ref=e248] [cursor=pointer]: Qualified
+      - generic [ref=e250] [cursor=pointer]:
+        - generic [ref=e251] [cursor=pointer]:
+          - heading "SchoolSafe Systems" [level=4] [ref=e252] [cursor=pointer]
+          - generic [ref=e253] [cursor=pointer]: Low
+        - paragraph [ref=e254] [cursor=pointer]: Healthcare • 306 employees
+        - generic [ref=e255] [cursor=pointer]:
+          - generic [ref=e258] [cursor=pointer]: 14/100
+          - generic [ref=e259] [cursor=pointer]: Contacted
+      - generic [ref=e261] [cursor=pointer]:
+        - generic [ref=e262] [cursor=pointer]:
+          - heading "PowerGrid Security" [level=4] [ref=e263] [cursor=pointer]
+          - generic [ref=e264] [cursor=pointer]: Critical
+        - paragraph [ref=e265] [cursor=pointer]: Legal • 260 employees
+        - generic [ref=e266] [cursor=pointer]:
+          - generic [ref=e269] [cursor=pointer]: 89/100
+          - generic [ref=e270] [cursor=pointer]: Qualified
+      - generic [ref=e272] [cursor=pointer]:
+        - generic [ref=e273] [cursor=pointer]:
+          - heading "SafeRetail Co" [level=4] [ref=e274] [cursor=pointer]
+          - generic [ref=e275] [cursor=pointer]: Low
+        - paragraph [ref=e276] [cursor=pointer]: Retail • 355 employees
+        - generic [ref=e277] [cursor=pointer]:
+          - generic [ref=e280] [cursor=pointer]: 21/100
+          - generic [ref=e281] [cursor=pointer]: New Lead
+      - generic [ref=e283] [cursor=pointer]:
+        - generic [ref=e284] [cursor=pointer]:
+          - heading "LegalGuard Inc" [level=4] [ref=e285] [cursor=pointer]
+          - generic [ref=e286] [cursor=pointer]: Medium
+        - paragraph [ref=e287] [cursor=pointer]: Software • 921 employees
+        - generic [ref=e288] [cursor=pointer]:
+          - generic [ref=e291] [cursor=pointer]: 47/100
+          - generic [ref=e292] [cursor=pointer]: New Lead
+      - generic [ref=e294] [cursor=pointer]:
+        - generic [ref=e295] [cursor=pointer]:
+          - heading "TechFlow Dynamics" [level=4] [ref=e296] [cursor=pointer]
+          - generic [ref=e297] [cursor=pointer]: Medium
+        - paragraph [ref=e298] [cursor=pointer]: Government • 1230 employees
+        - generic [ref=e299] [cursor=pointer]:
+          - generic [ref=e302] [cursor=pointer]: 50/100
+          - generic [ref=e303] [cursor=pointer]: New Lead
+      - generic [ref=e305] [cursor=pointer]:
+        - generic [ref=e306] [cursor=pointer]:
+          - heading "MedSecure Systems" [level=4] [ref=e307] [cursor=pointer]
+          - generic [ref=e308] [cursor=pointer]: Low
+        - paragraph [ref=e309] [cursor=pointer]: Finance • 1177 employees
+        - generic [ref=e310] [cursor=pointer]:
+          - generic [ref=e313] [cursor=pointer]: 1/100
+          - generic [ref=e314] [cursor=pointer]: Proposal Sent
+      - generic [ref=e316] [cursor=pointer]:
+        - generic [ref=e317] [cursor=pointer]:
+          - heading "BankTech Innovations" [level=4] [ref=e318] [cursor=pointer]
+          - generic [ref=e319] [cursor=pointer]: Medium
+        - paragraph [ref=e320] [cursor=pointer]: Software • 1535 employees
+        - generic [ref=e321] [cursor=pointer]:
+          - generic [ref=e324] [cursor=pointer]: 40/100
+          - generic [ref=e325] [cursor=pointer]: Demo Scheduled
+      - generic [ref=e327] [cursor=pointer]:
+        - generic [ref=e328] [cursor=pointer]:
+          - heading "FactoryShield Corp" [level=4] [ref=e329] [cursor=pointer]
+          - generic [ref=e330] [cursor=pointer]: Medium
+        - paragraph [ref=e331] [cursor=pointer]: Healthcare • 1672 employees
+        - generic [ref=e332] [cursor=pointer]:
+          - generic [ref=e335] [cursor=pointer]: 51/100
+          - generic [ref=e336] [cursor=pointer]: Demo Scheduled
+      - generic [ref=e338] [cursor=pointer]:
+        - generic [ref=e339] [cursor=pointer]:
+          - heading "EduProtect Solutions" [level=4] [ref=e340] [cursor=pointer]
+          - generic [ref=e341] [cursor=pointer]: Medium
+        - paragraph [ref=e342] [cursor=pointer]: Government • 157 employees
+        - generic [ref=e343] [cursor=pointer]:
+          - generic [ref=e346] [cursor=pointer]: 42/100
+          - generic [ref=e347] [cursor=pointer]: New Lead
+      - generic [ref=e349] [cursor=pointer]:
+        - generic [ref=e350] [cursor=pointer]:
+          - heading "CityTech Systems" [level=4] [ref=e351] [cursor=pointer]
+          - generic [ref=e352] [cursor=pointer]: Critical
+        - paragraph [ref=e353] [cursor=pointer]: Real Estate • 741 employees
+        - generic [ref=e354] [cursor=pointer]:
+          - generic [ref=e357] [cursor=pointer]: 85/100
+          - generic [ref=e358] [cursor=pointer]: Proposal Sent
+      - generic [ref=e360] [cursor=pointer]:
+        - generic [ref=e361] [cursor=pointer]:
+          - heading "GreenEnergy Security" [level=4] [ref=e362] [cursor=pointer]
+          - generic [ref=e363] [cursor=pointer]: Low
+        - paragraph [ref=e364] [cursor=pointer]: Government • 2034 employees
+        - generic [ref=e365] [cursor=pointer]:
+          - generic [ref=e368] [cursor=pointer]: 2/100
+          - generic [ref=e369] [cursor=pointer]: Follow-up
+      - generic [ref=e371] [cursor=pointer]:
+        - generic [ref=e372] [cursor=pointer]:
+          - heading "PropertyGuard LLC" [level=4] [ref=e373] [cursor=pointer]
+          - generic [ref=e374] [cursor=pointer]: High
+        - paragraph [ref=e375] [cursor=pointer]: Government • 860 employees
+        - generic [ref=e376] [cursor=pointer]:
+          - generic [ref=e379] [cursor=pointer]: 66/100
+          - generic [ref=e380] [cursor=pointer]: Qualified
+      - generic [ref=e382] [cursor=pointer]:
+        - generic [ref=e383] [cursor=pointer]:
+          - heading "CloudSecure Dynamics" [level=4] [ref=e384] [cursor=pointer]
+          - generic [ref=e385] [cursor=pointer]: High
+        - paragraph [ref=e386] [cursor=pointer]: Legal • 1887 employees
+        - generic [ref=e387] [cursor=pointer]:
+          - generic [ref=e390] [cursor=pointer]: 72/100
+          - generic [ref=e391] [cursor=pointer]: Qualified
+      - generic [ref=e393] [cursor=pointer]:
+        - generic [ref=e394] [cursor=pointer]:
+          - heading "HealthGuard Technologies" [level=4] [ref=e395] [cursor=pointer]
+          - generic [ref=e396] [cursor=pointer]: Low
+        - paragraph [ref=e397] [cursor=pointer]: Manufacturing • 2008 employees
+        - generic [ref=e398] [cursor=pointer]:
+          - generic [ref=e401] [cursor=pointer]: 21/100
+          - generic [ref=e402] [cursor=pointer]: Contacted
+      - generic [ref=e404] [cursor=pointer]:
+        - generic [ref=e405] [cursor=pointer]:
+          - heading "FinTech Innovations" [level=4] [ref=e406] [cursor=pointer]
+          - generic [ref=e407] [cursor=pointer]: Medium
+        - paragraph [ref=e408] [cursor=pointer]: Healthcare • 1605 employees
+        - generic [ref=e409] [cursor=pointer]:
+          - generic [ref=e412] [cursor=pointer]: 40/100
+          - generic [ref=e413] [cursor=pointer]: Follow-up
+      - generic [ref=e415] [cursor=pointer]:
+        - generic [ref=e416] [cursor=pointer]:
+          - heading "ManufactureTech Pro" [level=4] [ref=e417] [cursor=pointer]
+          - generic [ref=e418] [cursor=pointer]: Medium
+        - paragraph [ref=e419] [cursor=pointer]: Government • 690 employees
+        - generic [ref=e420] [cursor=pointer]:
+          - generic [ref=e423] [cursor=pointer]: 54/100
+          - generic [ref=e424] [cursor=pointer]: Proposal Sent
+      - generic [ref=e426] [cursor=pointer]:
+        - generic [ref=e427] [cursor=pointer]:
+          - heading "RetailSecure Plus" [level=4] [ref=e428] [cursor=pointer]
+          - generic [ref=e429] [cursor=pointer]: High
+        - paragraph [ref=e430] [cursor=pointer]: Real Estate • 1991 employees
+        - generic [ref=e431] [cursor=pointer]:
+          - generic [ref=e434] [cursor=pointer]: 68/100
+          - generic [ref=e435] [cursor=pointer]: Proposal Sent
+      - generic [ref=e437] [cursor=pointer]:
+        - generic [ref=e438] [cursor=pointer]:
+          - heading "EduCloud Systems" [level=4] [ref=e439] [cursor=pointer]
+          - generic [ref=e440] [cursor=pointer]: Critical
+        - paragraph [ref=e441] [cursor=pointer]: Manufacturing • 904 employees
+        - generic [ref=e442] [cursor=pointer]:
+          - generic [ref=e445] [cursor=pointer]: 94/100
+          - generic [ref=e446] [cursor=pointer]: New Lead
+      - generic [ref=e448] [cursor=pointer]:
+        - generic [ref=e449] [cursor=pointer]:
+          - heading "GovProtect Solutions" [level=4] [ref=e450] [cursor=pointer]
+          - generic [ref=e451] [cursor=pointer]: Low
+        - paragraph [ref=e452] [cursor=pointer]: Energy • 1348 employees
+        - generic [ref=e453] [cursor=pointer]:
+          - generic [ref=e456] [cursor=pointer]: 9/100
+          - generic [ref=e457] [cursor=pointer]: Follow-up
+      - generic [ref=e459] [cursor=pointer]:
+        - generic [ref=e460] [cursor=pointer]:
+          - heading "EnergySafe Corp" [level=4] [ref=e461] [cursor=pointer]
+          - generic [ref=e462] [cursor=pointer]: Medium
+        - paragraph [ref=e463] [cursor=pointer]: Retail • 1720 employees
+        - generic [ref=e464] [cursor=pointer]:
+          - generic [ref=e467] [cursor=pointer]: 48/100
+          - generic [ref=e468] [cursor=pointer]: Proposal Sent
+      - generic [ref=e470] [cursor=pointer]:
+        - generic [ref=e471] [cursor=pointer]:
+          - heading "RealtyTech Security" [level=4] [ref=e472] [cursor=pointer]
+          - generic [ref=e473] [cursor=pointer]: Low
+        - paragraph [ref=e474] [cursor=pointer]: Finance • 515 employees
+        - generic [ref=e475] [cursor=pointer]:
+          - generic [ref=e478] [cursor=pointer]: 39/100
+          - generic [ref=e479] [cursor=pointer]: Proposal Sent
+      - generic [ref=e481] [cursor=pointer]:
+        - generic [ref=e482] [cursor=pointer]:
+          - heading "LawTech Innovations" [level=4] [ref=e483] [cursor=pointer]
+          - generic [ref=e484] [cursor=pointer]: High
+        - paragraph [ref=e485] [cursor=pointer]: Real Estate • 831 employees
+        - generic [ref=e486] [cursor=pointer]:
+          - generic [ref=e489] [cursor=pointer]: 78/100
+          - generic [ref=e490] [cursor=pointer]: Demo Scheduled
+      - generic [ref=e492] [cursor=pointer]:
+        - generic [ref=e493] [cursor=pointer]:
+          - heading "DataShield Corporation" [level=4] [ref=e494] [cursor=pointer]
+          - generic [ref=e495] [cursor=pointer]: High
+        - paragraph [ref=e496] [cursor=pointer]: Retail • 1379 employees
+        - generic [ref=e497] [cursor=pointer]:
+          - generic [ref=e500] [cursor=pointer]: 67/100
+          - generic [ref=e501] [cursor=pointer]: Contacted
+      - generic [ref=e503] [cursor=pointer]:
+        - generic [ref=e504] [cursor=pointer]:
+          - heading "TechSecure Solutions" [level=4] [ref=e505] [cursor=pointer]
+          - generic [ref=e506] [cursor=pointer]: Low
+        - paragraph [ref=e507] [cursor=pointer]: Software • 1845 employees
+        - generic [ref=e508] [cursor=pointer]:
+          - generic [ref=e511] [cursor=pointer]: 31/100
+          - generic [ref=e512] [cursor=pointer]: Qualified
+      - generic [ref=e514] [cursor=pointer]:
+        - generic [ref=e515] [cursor=pointer]:
+          - heading "MedCloud Systems" [level=4] [ref=e516] [cursor=pointer]
+          - generic [ref=e517] [cursor=pointer]: High
+        - paragraph [ref=e518] [cursor=pointer]: Retail • 913 employees
+        - generic [ref=e519] [cursor=pointer]:
+          - generic [ref=e522] [cursor=pointer]: 70/100
+          - generic [ref=e523] [cursor=pointer]: New Lead
+      - generic [ref=e525] [cursor=pointer]:
+        - generic [ref=e526] [cursor=pointer]:
+          - heading "BankGuard Technologies" [level=4] [ref=e527] [cursor=pointer]
+          - generic [ref=e528] [cursor=pointer]: Medium
+        - paragraph [ref=e529] [cursor=pointer]: Manufacturing • 1742 employees
+        - generic [ref=e530] [cursor=pointer]:
+          - generic [ref=e533] [cursor=pointer]: 40/100
+          - generic [ref=e534] [cursor=pointer]: Demo Scheduled
+      - generic [ref=e536] [cursor=pointer]:
+        - generic [ref=e537] [cursor=pointer]:
+          - heading "FactorySafe Inc" [level=4] [ref=e538] [cursor=pointer]
+          - generic [ref=e539] [cursor=pointer]: High
+        - paragraph [ref=e540] [cursor=pointer]: Legal • 1699 employees
+        - generic [ref=e541] [cursor=pointer]:
+          - generic [ref=e544] [cursor=pointer]: 76/100
+          - generic [ref=e545] [cursor=pointer]: New Lead
+    - generic [ref=e547]:
+      - generic [ref=e549]:
+        - generic [ref=e550]:
+          - generic [ref=e551]:
+            - heading "TechCorp Solutions" [level=2] [ref=e552]
+            - paragraph [ref=e553]: Real Estate • Austin, GA
+          - generic [ref=e555]:
+            - img [ref=e556]
+            - text: 61/100
+        - generic [ref=e558]:
+          - generic [ref=e559]:
+            - img [ref=e560]
+            - generic [ref=e565]: 1811 employees
+          - generic [ref=e566]:
+            - img [ref=e567]
+            - generic [ref=e569]: 45M revenue
+          - generic [ref=e570]:
+            - img [ref=e571]
+            - link "Website" [ref=e574] [cursor=pointer]:
+              - /url: https://techcorpsolutions.com
+          - generic [ref=e575]:
+            - img [ref=e576]
+            - generic [ref=e578]: "Last: Never"
+        - generic [ref=e579]:
+          - button "Send Email" [ref=e580]:
+            - img [ref=e581]
+            - text: Send Email
+          - button "Schedule Call" [ref=e584]:
+            - img [ref=e585]
+            - text: Schedule Call
+          - button "LinkedIn" [ref=e587]:
+            - img [ref=e588]
+            - text: LinkedIn
+      - generic [ref=e591]:
+        - tablist [ref=e592]:
+          - tab "Overview" [selected] [ref=e593]
+          - tab "Contacts" [ref=e594]
+          - tab "Intelligence" [ref=e595]
+          - tab "Outreach" [ref=e596]
+          - tab "Activity" [ref=e597]
+        - tabpanel "Overview" [ref=e598]:
+          - generic [ref=e599]:
+            - generic [ref=e600]:
+              - heading "Security Concerns" [level=3] [ref=e602]:
+                - img [ref=e603]
+                - text: Security Concerns
+              - list [ref=e606]:
+                - listitem [ref=e607]:
+                  - img [ref=e608]
+                  - text: FERPA compliance
+                - listitem [ref=e610]:
+                  - img [ref=e611]
+                  - text: Student data protection
+                - listitem [ref=e613]:
+                  - img [ref=e614]
+                  - text: Remote learning security
+                - listitem [ref=e616]:
+                  - img [ref=e617]
+                  - text: Campus network security
+            - generic [ref=e619]:
+              - heading "Recent Activity" [level=3] [ref=e621]
+              - list [ref=e623]:
+                - listitem [ref=e624]: • Security training program launched
+                - listitem [ref=e625]: • Implementing new security tools
+                - listitem [ref=e626]: • Security training program launched
+          - generic [ref=e627]:
+            - heading "Tech Stack & Security Tools" [level=3] [ref=e629]
+            - generic [ref=e631]:
+              - generic [ref=e632]:
+                - heading "Technology Stack:" [level=4] [ref=e633]
+                - generic [ref=e634]:
+                  - generic [ref=e635]: AWS
+                  - generic [ref=e636]: React
+                  - generic [ref=e637]: Node.js
+                  - generic [ref=e638]: PostgreSQL
+              - generic [ref=e639]:
+                - heading "Current Security Tools:" [level=4] [ref=e640]
+                - generic [ref=e641]:
+                  - generic [ref=e642]: Ping Identity
+                  - generic [ref=e643]: SentinelOne
+                  - generic [ref=e644]: Elastic
+```

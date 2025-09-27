@@ -1,0 +1,284 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - img "INP² Security Logo" [ref=e6]
+      - generic [ref=e7]:
+        - heading "Cybersecurity Lead Generation Dashboard" [level=1] [ref=e8]
+        - paragraph [ref=e9]: INP² Security Solutions
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - button "Executive" [ref=e12]:
+          - img [ref=e13]
+          - text: Executive
+        - button "Detailed" [ref=e15]:
+          - img [ref=e16]
+          - text: Detailed
+      - button "Generate Leads" [ref=e17]:
+        - img [ref=e18]
+        - text: Generate Leads
+      - button "Apollo API" [ref=e23]:
+        - img [ref=e24]
+        - text: Apollo API
+      - button "Security News" [ref=e27]:
+        - img [ref=e28]
+        - text: Security News
+      - button "Bulk Email" [ref=e30]:
+        - img [ref=e31]
+        - text: Bulk Email
+      - button "Analytics" [ref=e34]:
+        - img [ref=e35]
+        - text: Analytics
+  - generic [ref=e38]:
+    - generic [ref=e39]:
+      - img [ref=e40]
+      - textbox "Search companies..." [ref=e43]
+    - combobox [ref=e44]:
+      - option "All Industries" [selected]
+      - option "Software"
+      - option "Healthcare"
+      - option "Finance"
+    - button "More Filters" [ref=e45]:
+      - img [ref=e46]
+      - text: More Filters
+  - generic [ref=e48]:
+    - generic [ref=e51]:
+      - generic [ref=e52]:
+        - heading "Executive Lead Intelligence" [level=1] [ref=e53]
+        - paragraph [ref=e54]: AI-powered cybersecurity opportunity prioritization
+      - generic [ref=e56]:
+        - generic [ref=e57]: "2"
+        - generic [ref=e58]: Critical Opportunities
+    - generic [ref=e59]:
+      - generic [ref=e61]:
+        - generic [ref=e62]: "2"
+        - generic [ref=e63]: Critical Priority
+      - generic [ref=e65]:
+        - generic [ref=e66]: "1"
+        - generic [ref=e67]: High Priority
+      - generic [ref=e69]:
+        - generic [ref=e70]: "0"
+        - generic [ref=e71]: Total Signals
+      - generic [ref=e73]:
+        - generic [ref=e74]: "38"
+        - generic [ref=e75]: Avg Score
+    - generic [ref=e76]:
+      - generic [ref=e77]:
+        - heading "Priority Queue (20 leads)" [level=2] [ref=e78]
+        - button "Refresh AI Analysis" [ref=e79]:
+          - img [ref=e80]
+          - text: Refresh AI Analysis
+      - generic [ref=e88]:
+        - generic [ref=e89] [cursor=pointer]:
+          - generic [ref=e90] [cursor=pointer]:
+            - generic [ref=e91] [cursor=pointer]:
+              - generic [ref=e92] [cursor=pointer]:
+                - generic [ref=e93] [cursor=pointer]: "#1"
+                - generic [ref=e94] [cursor=pointer]:
+                  - img [ref=e95] [cursor=pointer]
+                  - text: Critical
+              - generic [ref=e97] [cursor=pointer]:
+                - generic [ref=e98] [cursor=pointer]: "95"
+                - img [ref=e99] [cursor=pointer]
+            - generic [ref=e101] [cursor=pointer]:
+              - heading "SchoolSafe Systems" [level=3] [ref=e102] [cursor=pointer]
+              - generic [ref=e103] [cursor=pointer]: Healthcare • 638 employees • New York, CO
+          - generic [ref=e106] [cursor=pointer]:
+            - generic [ref=e107] [cursor=pointer]:
+              - img [ref=e108] [cursor=pointer]
+              - text: "Impact: High"
+            - generic [ref=e112] [cursor=pointer]:
+              - img [ref=e113] [cursor=pointer]
+              - text: "Confidence: Medium"
+        - generic [ref=e116] [cursor=pointer]:
+          - generic [ref=e117] [cursor=pointer]:
+            - generic [ref=e118] [cursor=pointer]:
+              - generic [ref=e119] [cursor=pointer]:
+                - generic [ref=e120] [cursor=pointer]: "#2"
+                - generic [ref=e121] [cursor=pointer]:
+                  - img [ref=e122] [cursor=pointer]
+                  - text: Critical
+              - generic [ref=e124] [cursor=pointer]:
+                - generic [ref=e125] [cursor=pointer]: "91"
+                - img [ref=e126] [cursor=pointer]
+            - generic [ref=e128] [cursor=pointer]:
+              - heading "BuildTech Solutions" [level=3] [ref=e129] [cursor=pointer]
+              - generic [ref=e130] [cursor=pointer]: Finance • 1935 employees • Seattle, TX
+          - generic [ref=e133] [cursor=pointer]:
+            - generic [ref=e134] [cursor=pointer]:
+              - img [ref=e135] [cursor=pointer]
+              - text: "Impact: High"
+            - generic [ref=e139] [cursor=pointer]:
+              - img [ref=e140] [cursor=pointer]
+              - text: "Confidence: Medium"
+        - generic [ref=e143] [cursor=pointer]:
+          - generic [ref=e144] [cursor=pointer]:
+            - generic [ref=e145] [cursor=pointer]:
+              - generic [ref=e146] [cursor=pointer]:
+                - generic [ref=e147] [cursor=pointer]: "#3"
+                - generic [ref=e148] [cursor=pointer]:
+                  - img [ref=e149] [cursor=pointer]
+                  - text: High
+              - generic [ref=e151] [cursor=pointer]:
+                - generic [ref=e152] [cursor=pointer]: "70"
+                - img [ref=e153] [cursor=pointer]
+            - generic [ref=e155] [cursor=pointer]:
+              - heading "PropertyTech Co" [level=3] [ref=e156] [cursor=pointer]
+              - generic [ref=e157] [cursor=pointer]: Manufacturing • 1829 employees • San Francisco, TX
+          - generic [ref=e160] [cursor=pointer]:
+            - generic [ref=e161] [cursor=pointer]:
+              - img [ref=e162] [cursor=pointer]
+              - text: "Impact: Medium-High"
+            - generic [ref=e166] [cursor=pointer]:
+              - img [ref=e167] [cursor=pointer]
+              - text: "Confidence: Medium"
+        - generic [ref=e170] [cursor=pointer]:
+          - generic [ref=e171] [cursor=pointer]:
+            - generic [ref=e172] [cursor=pointer]:
+              - generic [ref=e173] [cursor=pointer]:
+                - generic [ref=e174] [cursor=pointer]: "#4"
+                - generic [ref=e175] [cursor=pointer]:
+                  - img [ref=e176] [cursor=pointer]
+                  - text: Medium
+              - generic [ref=e179] [cursor=pointer]:
+                - generic [ref=e180] [cursor=pointer]: "63"
+                - img [ref=e181] [cursor=pointer]
+            - generic [ref=e183] [cursor=pointer]:
+              - heading "GovSolutions Ltd" [level=3] [ref=e184] [cursor=pointer]
+              - generic [ref=e185] [cursor=pointer]: Real Estate • 978 employees • Austin, GA
+          - generic [ref=e188] [cursor=pointer]:
+            - generic [ref=e189] [cursor=pointer]:
+              - img [ref=e190] [cursor=pointer]
+              - text: "Impact: Medium"
+            - generic [ref=e194] [cursor=pointer]:
+              - img [ref=e195] [cursor=pointer]
+              - text: "Confidence: Medium"
+        - generic [ref=e198] [cursor=pointer]:
+          - generic [ref=e199] [cursor=pointer]:
+            - generic [ref=e200] [cursor=pointer]:
+              - generic [ref=e201] [cursor=pointer]:
+                - generic [ref=e202] [cursor=pointer]: "#5"
+                - generic [ref=e203] [cursor=pointer]:
+                  - img [ref=e204] [cursor=pointer]
+                  - text: Medium
+              - generic [ref=e207] [cursor=pointer]:
+                - generic [ref=e208] [cursor=pointer]: "60"
+                - img [ref=e209] [cursor=pointer]
+            - generic [ref=e211] [cursor=pointer]:
+              - heading "PowerGrid Security" [level=3] [ref=e212] [cursor=pointer]
+              - generic [ref=e213] [cursor=pointer]: Legal • 363 employees • Seattle, GA
+          - generic [ref=e216] [cursor=pointer]:
+            - generic [ref=e217] [cursor=pointer]:
+              - img [ref=e218] [cursor=pointer]
+              - text: "Impact: Medium"
+            - generic [ref=e222] [cursor=pointer]:
+              - img [ref=e223] [cursor=pointer]
+              - text: "Confidence: Medium"
+        - generic [ref=e226] [cursor=pointer]:
+          - generic [ref=e227] [cursor=pointer]:
+            - generic [ref=e228] [cursor=pointer]:
+              - generic [ref=e229] [cursor=pointer]:
+                - generic [ref=e230] [cursor=pointer]: "#6"
+                - generic [ref=e231] [cursor=pointer]:
+                  - img [ref=e232] [cursor=pointer]
+                  - text: Medium
+              - generic [ref=e235] [cursor=pointer]:
+                - generic [ref=e236] [cursor=pointer]: "58"
+                - img [ref=e237] [cursor=pointer]
+            - generic [ref=e239] [cursor=pointer]:
+              - heading "LegalEase Partners" [level=3] [ref=e240] [cursor=pointer]
+              - generic [ref=e241] [cursor=pointer]: Legal • 361 employees • Seattle, WA
+          - generic [ref=e244] [cursor=pointer]:
+            - generic [ref=e245] [cursor=pointer]:
+              - img [ref=e246] [cursor=pointer]
+              - text: "Impact: Medium"
+            - generic [ref=e250] [cursor=pointer]:
+              - img [ref=e251] [cursor=pointer]
+              - text: "Confidence: Medium"
+        - generic [ref=e254] [cursor=pointer]:
+          - generic [ref=e255] [cursor=pointer]:
+            - generic [ref=e256] [cursor=pointer]:
+              - generic [ref=e257] [cursor=pointer]:
+                - generic [ref=e258] [cursor=pointer]: "#7"
+                - generic [ref=e259] [cursor=pointer]:
+                  - img [ref=e260] [cursor=pointer]
+                  - text: Low
+              - generic [ref=e263] [cursor=pointer]:
+                - generic [ref=e264] [cursor=pointer]: "51"
+                - img [ref=e265] [cursor=pointer]
+            - generic [ref=e267] [cursor=pointer]:
+              - heading "SmartManufacturing" [level=3] [ref=e268] [cursor=pointer]
+              - generic [ref=e269] [cursor=pointer]: Software • 648 employees • New York, TX
+          - generic [ref=e272] [cursor=pointer]:
+            - generic [ref=e273] [cursor=pointer]:
+              - img [ref=e274] [cursor=pointer]
+              - text: "Impact: Medium"
+            - generic [ref=e278] [cursor=pointer]:
+              - img [ref=e279] [cursor=pointer]
+              - text: "Confidence: Medium"
+        - generic [ref=e282] [cursor=pointer]:
+          - generic [ref=e283] [cursor=pointer]:
+            - generic [ref=e284] [cursor=pointer]:
+              - generic [ref=e285] [cursor=pointer]:
+                - generic [ref=e286] [cursor=pointer]: "#8"
+                - generic [ref=e287] [cursor=pointer]:
+                  - img [ref=e288] [cursor=pointer]
+                  - text: Low
+              - generic [ref=e291] [cursor=pointer]:
+                - generic [ref=e292] [cursor=pointer]: "50"
+                - img [ref=e293] [cursor=pointer]
+            - generic [ref=e295] [cursor=pointer]:
+              - heading "TechCorp Solutions" [level=3] [ref=e296] [cursor=pointer]
+              - generic [ref=e297] [cursor=pointer]: Government • 1965 employees • San Francisco, GA
+          - generic [ref=e300] [cursor=pointer]:
+            - generic [ref=e301] [cursor=pointer]:
+              - img [ref=e302] [cursor=pointer]
+              - text: "Impact: Medium"
+            - generic [ref=e306] [cursor=pointer]:
+              - img [ref=e307] [cursor=pointer]
+              - text: "Confidence: Medium"
+        - generic [ref=e310] [cursor=pointer]:
+          - generic [ref=e311] [cursor=pointer]:
+            - generic [ref=e312] [cursor=pointer]:
+              - generic [ref=e313] [cursor=pointer]:
+                - generic [ref=e314] [cursor=pointer]: "#9"
+                - generic [ref=e315] [cursor=pointer]:
+                  - img [ref=e316] [cursor=pointer]
+                  - text: Low
+              - generic [ref=e319] [cursor=pointer]:
+                - generic [ref=e320] [cursor=pointer]: "45"
+                - img [ref=e321] [cursor=pointer]
+            - generic [ref=e323] [cursor=pointer]:
+              - heading "FinanceSecure LLC" [level=3] [ref=e324] [cursor=pointer]
+              - generic [ref=e325] [cursor=pointer]: Healthcare • 1244 employees • San Francisco, CA
+          - generic [ref=e328] [cursor=pointer]:
+            - generic [ref=e329] [cursor=pointer]:
+              - img [ref=e330] [cursor=pointer]
+              - text: "Impact: Medium"
+            - generic [ref=e334] [cursor=pointer]:
+              - img [ref=e335] [cursor=pointer]
+              - text: "Confidence: Medium"
+        - generic [ref=e338] [cursor=pointer]:
+          - generic [ref=e339] [cursor=pointer]:
+            - generic [ref=e340] [cursor=pointer]:
+              - generic [ref=e341] [cursor=pointer]:
+                - generic [ref=e342] [cursor=pointer]: "#10"
+                - generic [ref=e343] [cursor=pointer]:
+                  - img [ref=e344] [cursor=pointer]
+                  - text: Low
+              - generic [ref=e347] [cursor=pointer]:
+                - generic [ref=e348] [cursor=pointer]: "41"
+                - img [ref=e349] [cursor=pointer]
+            - generic [ref=e351] [cursor=pointer]:
+              - heading "EduTech Systems" [level=3] [ref=e352] [cursor=pointer]
+              - generic [ref=e353] [cursor=pointer]: Legal • 1355 employees • Denver, GA
+          - generic [ref=e356] [cursor=pointer]:
+            - generic [ref=e357] [cursor=pointer]:
+              - img [ref=e358] [cursor=pointer]
+              - text: "Impact: Medium"
+            - generic [ref=e362] [cursor=pointer]:
+              - img [ref=e363] [cursor=pointer]
+              - text: "Confidence: Medium"
+```

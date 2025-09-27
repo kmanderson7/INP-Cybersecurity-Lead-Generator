@@ -1,0 +1,40 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[dev]
+  framework = "vite"
+  targetPort = 5173
+  port = 8888
+
+# --- IMPORTANT: let Vite handle its module routes in dev ---
+[[redirects]]
+  from = "/@vite/*"
+  to = "http://localhost:5173/@vite/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/@react-refresh"
+  to = "http://localhost:5173/@react-refresh"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/src/*"
+  to = "http://localhost:5173/src/:splat"
+  status = 200
+  force = true
+
+# SPA fallback (keep this LAST)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[build.environment]
+  NODE_VERSION = "18"
