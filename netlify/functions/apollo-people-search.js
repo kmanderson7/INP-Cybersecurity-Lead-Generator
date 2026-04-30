@@ -2,6 +2,7 @@ import { jsonResponse, errorResponse, fetchWithRetry } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
 import { scorePerson, SCORING_PROFILES } from '../lib/normalize.js';
+import { qualifyTradeFinanceContacts } from '../lib/tradeFinanceContacts.js';
 
 const APOLLO_BASE_URL = 'https://api.apollo.io/api/v1';
 
@@ -130,7 +131,11 @@ async function fetchApolloPeople(apiKey, titles, domains, page, perPage, profile
     throw new Error('Invalid response format from Apollo people search');
   }
 
-  return people.map(p => scorePerson(p, profile));
+  if (profile === 'commodity_trading') {
+    return qualifyPeopleSearchResults(people, { source: 'apollo_live', provider: 'apollo_people_search' });
+  }
+
+  return people.map((p) => scorePerson(p, profile));
 }
 
 function generateMockPeople(titles, domains, profile) {
@@ -165,7 +170,39 @@ function generateMockPeople(titles, domains, profile) {
       }
     };
 
-    mock.push(scorePerson(rawPerson, profile));
+    mock.push(profile === 'commodity_trading'
+      ? rawPerson
+      : scorePerson(rawPerson, profile));
   }
+
+  if (profile === 'commodity_trading') {
+    return qualifyPeopleSearchResults(mock, { source: 'mock', provider: 'apollo_people_search' });
+  }
+
   return mock;
+}
+
+function qualifyPeopleSearchResults(people, sourceMeta) {
+  const byCompany = new Map();
+
+  for (const person of people) {
+    const companyName = person.organization?.name || person.company || 'Unknown Company';
+    if (!byCompany.has(companyName)) {
+      byCompany.set(companyName, []);
+    }
+    byCompany.get(companyName).push(person);
+  }
+
+  return Array.from(byCompany.entries())
+    .flatMap(([companyName, companyPeople]) => qualifyTradeFinanceContacts(companyPeople, sourceMeta, companyName))
+    .map((contact) => ({
+      ...contact,
+      score: contact.relevanceScore,
+      priority: contact.roleCategory === 'decision_maker' ? 'Critical' : contact.roleCategory === 'operator' ? 'High' : 'Medium',
+      scoreReasons: [
+        `Matched role category: ${contact.roleCategory.replace('_', ' ')}`,
+        `Priority rank: ${contact.priorityRank}`,
+        `Qualified for ${contact.company || 'target company'}`
+      ]
+    }));
 }

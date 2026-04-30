@@ -1,7 +1,8 @@
-import { jsonResponse, errorResponse, fetchWithRetry } from '../lib/http.js';
+import { errorResponse, fetchWithRetry, successResponse } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
 import { calculateScore } from '../lib/normalize.js';
+import { attachSignalMeta, requireLiveDataEnabled } from '../lib/source.js';
 
 export async function handler(event) {
   const newsKey = process.env.NEWS_API_KEY;
@@ -30,33 +31,91 @@ export async function handler(event) {
 
     if (!newsKey) {
       console.warn('News API key missing, using mock data');
-      const mockLeads = generateMockNewsLeads(industry);
-      const result = { success: true, source: 'news_mock', leads: mockLeads };
-      set(cacheKey, result, 60 * 60 * 1000); // Cache for 1 hour
-      return json(result);
+      if (requireLiveDataEnabled()) {
+        return errorResponse('Live news lead data is required but News API is not configured.', 503, {
+          source: 'mock',
+          provider: 'news_api',
+          reason: 'REQUIRE_LIVE_DATA blocked mock news fallback.'
+        });
+      }
+
+      const mockLeads = generateMockNewsLeads(industry).map((lead) => ({
+        ...lead,
+        sourceMeta: {
+          source: 'mock',
+          provider: 'news_demo',
+          live: false,
+          fallbackUsed: true
+        }
+      }));
+      const response = successResponse(
+        { leads: mockLeads },
+        {
+          source: 'mock',
+          provider: 'news_demo',
+          reason: 'News API key missing; returned labeled mock news leads.',
+          confidence: 0.32
+        }
+      );
+      set(cacheKey, JSON.parse(response.body), 60 * 60 * 1000);
+      return response;
     }
 
     // Implement actual News API call
     try {
       const newsLeads = await fetchNewsLeads(newsKey, industry, keywords);
       if (newsLeads && newsLeads.length > 0) {
-        const result = { success: true, source: 'news_live', leads: newsLeads };
-        set(cacheKey, result, 30 * 60 * 1000); // Cache for 30 minutes (news changes frequently)
-        return json(result);
+        const response = successResponse(
+          { leads: newsLeads },
+          {
+            source: 'provider_live',
+            provider: 'news_api',
+            confidence: 0.72
+          }
+        );
+        set(cacheKey, JSON.parse(response.body), 30 * 60 * 1000);
+        return response;
       }
     } catch (error) {
       console.warn('News API failed, falling back to mock data:', error.message);
     }
 
     // Fallback to mock data when API fails
-    const mockLeads = generateMockNewsLeads(industry);
-    const result = { success: true, source: 'news_fallback', leads: mockLeads };
-    set(cacheKey, result, 60 * 60 * 1000);
-    return json(result);
+    if (requireLiveDataEnabled()) {
+      return errorResponse('Live news lead data is required but the provider request failed.', 503, {
+        source: 'provider_live',
+        provider: 'news_api',
+        reason: 'REQUIRE_LIVE_DATA blocked mock news fallback after provider failure.'
+      });
+    }
+
+    const mockLeads = generateMockNewsLeads(industry).map((lead) => ({
+      ...lead,
+      sourceMeta: {
+        source: 'provider_fallback',
+        provider: 'news_api',
+        live: false,
+        fallbackUsed: true
+      }
+    }));
+    const response = successResponse(
+      { leads: mockLeads },
+      {
+        source: 'provider_fallback',
+        provider: 'news_api',
+        reason: 'News provider failed; returned labeled mock news leads.',
+        confidence: 0.28
+      }
+    );
+    set(cacheKey, JSON.parse(response.body), 60 * 60 * 1000);
+    return response;
 
   } catch (error) {
     console.error('Error in news-leads:', error);
-    return json({ error: error.message || 'Failed to fetch news leads' }, 500);
+    return errorResponse('Failed to fetch news leads', 500, {
+      source: 'provider_fallback',
+      provider: 'news_api'
+    });
   }
 }
 
@@ -141,7 +200,7 @@ async function transformNewsToLeads(articles, targetIndustry) {
         processedCompanies.add(companyName.toLowerCase());
 
         // Determine why this is a valuable lead
-        const leadSignals = analyzeNewsForSignals(article, companyName);
+        const leadSignals = analyzeNewsForSignals(article);
 
         if (leadSignals.length === 0) continue; // Skip if no relevant signals
 
@@ -161,10 +220,13 @@ async function transformNewsToLeads(articles, targetIndustry) {
           priority: scoring.priority,
           lastContact: null,
           status: 'New Lead',
-          signals: leadSignals,
+          signals: attachSignalMeta(leadSignals, {
+            source: 'provider_live',
+            provider: 'news_api'
+          }),
           executives: [{
             name: 'Contact Required',
-            title: 'Security Decision Maker',
+            title: 'Trade Finance Decision Maker',
             email: `security@${companyName.toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9]/g, '')}.com`
           }],
           news: [{
@@ -187,7 +249,13 @@ async function transformNewsToLeads(articles, targetIndustry) {
             lastRound: 'Information not available',
             investors: 'Information not available'
           },
-          explainScore: scoring.explainScore
+          explainScore: scoring.explainScore,
+          sourceMeta: {
+            source: 'provider_live',
+            provider: 'news_api',
+            live: true,
+            fallbackUsed: false
+          }
         };
 
         leads.push(lead);
@@ -225,7 +293,7 @@ function extractCompanyNames(title, description) {
   return companies.slice(0, 3); // Limit to 3 companies per article
 }
 
-function analyzeNewsForSignals(article, companyName) {
+function analyzeNewsForSignals(article) {
   const text = `${article.title} ${article.description || ''}`.toLowerCase();
   const signals = [];
 
@@ -348,7 +416,7 @@ function generateMockNewsLeads(industry) {
       priority: 'Critical',
       lastContact: null,
       status: 'New Lead',
-      executives: [{ name: 'Alex Rivera', title: 'VP Security', email: 'alex@secureretail.example' }],
+      executives: [{ name: 'Alex Rivera', title: 'Head of Trade Finance', email: 'alex@secureretail.example' }],
       news: [
         { date: '2024-07-21', title: 'Retailer hit by credential stuffing attack', source: 'Industry News' },
       ],
@@ -358,6 +426,12 @@ function generateMockNewsLeads(industry) {
       recentActivity: ['Security audit scheduled','Hiring Security Engineer','Budget increased'],
       socialProof: { linkedinFollowers: 22000, glassdoorRating: 3.9, trustpilotScore: 4.1 },
       financials: { funding: '15M total raised', lastRound: 'Series A - 7M', investors: ['Kleiner Perkins'] },
+      sourceMeta: {
+        source: 'mock',
+        provider: 'news_demo',
+        live: false,
+        fallbackUsed: true
+      }
     },
   ];
 }

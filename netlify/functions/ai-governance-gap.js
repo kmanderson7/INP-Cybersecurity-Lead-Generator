@@ -1,7 +1,8 @@
-import { jsonResponse, errorResponse, fetchWithRetry } from '../lib/http.js';
+import { jsonResponse, errorResponse, fetchWithRetry, successResponse } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
 import { createSignal } from '../lib/normalize.js';
+import { attachSignalMeta } from '../lib/source.js';
 
 export async function handler(event) {
   if (event.httpMethod === 'OPTIONS') {
@@ -32,15 +33,29 @@ export async function handler(event) {
       return jsonResponse(cached);
     }
 
-    const signals = await detectAIGovernanceGap(domain, company);
-    const result = { success: true, signals, source: 'ai_governance_intelligence' };
+    const signals = attachSignalMeta(await detectAIGovernanceGap(domain, company), {
+      source: 'provider_fallback',
+      provider: 'website_ai_gap_model',
+      confidence: 0.48
+    });
+    const response = successResponse({
+      signals
+    }, {
+      source: 'provider_fallback',
+      provider: 'website_ai_gap_model',
+      reason: 'AI governance gap currently uses website heuristics and not a live AI-control provider.',
+      confidence: 0.48
+    });
 
-    set(cacheKey, result, 24 * 60 * 60 * 1000); // Cache for 24 hours
-    return jsonResponse(result);
+    set(cacheKey, JSON.parse(response.body), 24 * 60 * 60 * 1000);
+    return response;
 
   } catch (error) {
     console.error('Error in ai-governance-gap:', error);
-    return errorResponse(error.message || 'Failed to analyze AI governance');
+    return errorResponse('Failed to analyze AI governance', 500, {
+      source: 'provider_fallback',
+      provider: 'website_ai_gap_model'
+    });
   }
 }
 
@@ -212,7 +227,8 @@ function analyzeGovernanceGap(aiSignals, governanceSignals) {
       'high',
       25,
       'AI technology in use without visible governance framework',
-      ['website_analysis']
+      ['website_analysis'],
+      { confidence: 0.52 }
     );
   } else if (hasAI && hasGovernance) {
     // Lower impact: AI usage with some governance
@@ -226,7 +242,8 @@ function analyzeGovernanceGap(aiSignals, governanceSignals) {
         'medium',
         15,
         'AI usage appears to outpace governance documentation maturity',
-        ['website_analysis']
+        ['website_analysis'],
+        { confidence: 0.48 }
       );
     }
   }

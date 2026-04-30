@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { getSourceBadge, getSourceWarning, isNonLiveMeta } from '@/lib/sourceMeta';
 import {
   AlertCircle, TrendingUp, Clock, Shield, Brain, Star,
   ChevronRight, Loader2, AlertTriangle, CheckCircle2,
@@ -147,6 +148,10 @@ const ExecutiveDashboard = ({ companies = [], onCompanySelect, netlifyAPI }) => 
     const urgentOpportunities = leads.filter(l =>
       l.signals?.some(s => s.type === 'breach_proximity' || s.type === 'reg_countdown')
     ).length;
+    const nonLiveCount = leads.filter((lead) =>
+      isNonLiveMeta(lead.sourceMeta) || lead.signals?.some((signal) => isNonLiveMeta(signal.meta))
+    ).length;
+    const liveAccountCount = Math.max(leads.length - nonLiveCount, 0);
 
     setAiInsights({
       criticalLeads: critical,
@@ -162,6 +167,8 @@ const ExecutiveDashboard = ({ companies = [], onCompanySelect, netlifyAPI }) => 
       completedOutreach,
       conversionRate,
       urgentOpportunities,
+      nonLiveCount,
+      liveAccountCount,
       keyRecommendations: generateExecutiveRecommendations(leads),
       marketIntelligence: generateMarketIntelligence(leads)
     });
@@ -193,7 +200,7 @@ const ExecutiveDashboard = ({ companies = [], onCompanySelect, netlifyAPI }) => 
       recommendations.push({
         priority: 'Critical',
         action: 'Immediate Executive Outreach',
-        description: `${criticalLeads.length} critical opportunities require executive attention within 48 hours`,
+        description: `${criticalLeads.length} top accounts need outreach within 48 hours`,
         impact: 'High',
         effort: 'Medium',
         companies: criticalLeads.slice(0, 3).map(l => l.name)
@@ -208,7 +215,7 @@ const ExecutiveDashboard = ({ companies = [], onCompanySelect, netlifyAPI }) => 
       recommendations.push({
         priority: 'High',
         action: 'Time-Sensitive Campaign',
-        description: `${urgentSignals.length} companies facing urgent compliance/security deadlines`,
+        description: `${urgentSignals.length} companies face near-term timing or control pressure`,
         impact: 'High',
         effort: 'Low',
         companies: urgentSignals.slice(0, 3).map(l => l.name)
@@ -283,10 +290,10 @@ const ExecutiveDashboard = ({ companies = [], onCompanySelect, netlifyAPI }) => 
       topSignals,
       topStates,
       trends: [
-        'Regulatory compliance deadlines driving urgency',
-        'Executive turnover creating security gaps',
-        'Insurance renewals forcing security audits',
-        'SaaS consolidation projects gaining momentum'
+        'Regulatory deadlines are driving workflow reviews',
+        'Leadership changes are reopening finance operations decisions',
+        'Insurance timing is accelerating control reviews',
+        'Platform consolidation projects are gaining momentum'
       ]
     };
   };
@@ -346,10 +353,18 @@ const ExecutiveDashboard = ({ companies = [], onCompanySelect, netlifyAPI }) => 
           <div className="text-sm text-gray-600">
             {lead.industry} • {lead.employees} employees • {lead.location}
           </div>
+          <Badge variant="outline" className={`mt-2 text-[10px] ${getSourceBadge(lead.sourceMeta).className}`}>
+            {getSourceBadge(lead.sourceMeta).label}
+          </Badge>
         </div>
       </CardHeader>
       <CardContent>
         <div className="space-y-3">
+          {getSourceWarning(lead.sourceMeta) && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              {getSourceWarning(lead.sourceMeta)}
+            </div>
+          )}
           {/* AI-Generated Executive Summary */}
           {lead.aiAnalysis?.executiveSummary && (
             <div className="bg-blue-50 p-3 rounded-lg">
@@ -427,7 +442,7 @@ const ExecutiveDashboard = ({ companies = [], onCompanySelect, netlifyAPI }) => 
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-3xl font-bold mb-2">Executive Lead Intelligence</h1>
-              <p className="text-blue-100">AI-powered cybersecurity opportunity prioritization</p>
+              <p className="text-blue-100">Clear view of who to call, why now, and how strong the signal is</p>
             </div>
             <div className="text-right">
               {aiInsights && (
@@ -487,21 +502,29 @@ const ExecutiveDashboard = ({ companies = [], onCompanySelect, netlifyAPI }) => 
               <div className="text-3xl font-bold text-purple-600">{aiInsights.urgentOpportunities || 0}</div>
               <div className="text-sm text-purple-700 font-medium">Urgent Signals</div>
               <div className="text-xs text-purple-600 mt-1">
-                Time-sensitive
+                Needs near-term action
               </div>
             </CardContent>
           </Card>
         </div>
       )}
 
+      {aiInsights?.nonLiveCount > 0 && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardContent className="p-4 text-sm text-amber-900">
+            Signal mix: {aiInsights.liveAccountCount} live-first accounts and {aiInsights.nonLiveCount} accounts with fallback or AI-generated intelligence.
+          </CardContent>
+        </Card>
+      )}
+
       {/* Executive Recommendations */}
       {aiInsights?.keyRecommendations && (
         <Card className="border-yellow-200 bg-yellow-50">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-yellow-800">
-              <Brain className="w-5 h-5" />
-              AI-Powered Executive Recommendations
-            </CardTitle>
+              <CardTitle className="flex items-center gap-2 text-yellow-800">
+                <Brain className="w-5 h-5" />
+                Recommended Next Actions
+              </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

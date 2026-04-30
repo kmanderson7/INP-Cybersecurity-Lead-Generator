@@ -1,4 +1,4 @@
-import { jsonResponse, errorResponse } from '../lib/http.js';
+import { jsonResponse, errorResponse, successResponse } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
 
 export async function handler(event) {
@@ -39,29 +39,37 @@ export async function handler(event) {
     }
 
     const emailProvider = process.env.EMAIL_PROVIDER || 'sendgrid';
-    let result;
+    const hasProviderKey = (emailProvider === 'sendgrid' && process.env.SENDGRID_API_KEY)
+      || (emailProvider === 'mailgun' && process.env.MAILGUN_API_KEY && process.env.MAILGUN_DOMAIN);
 
-    if (emailProvider === 'sendgrid') {
-      result = await sendWithSendGrid(to, subject, body, leadId);
-    } else if (emailProvider === 'mailgun') {
-      result = await sendWithMailgun(to, subject, body, leadId);
-    } else {
-      // Mock send for development
-      result = await mockSendEmail(to, subject, body, leadId);
-    }
+    const result = hasProviderKey
+      ? emailProvider === 'mailgun'
+        ? await sendWithMailgun(to, subject, body, leadId)
+        : await sendWithSendGrid(to, subject, body, leadId)
+      : await mockSendEmail(to, subject, body, leadId);
 
-    return jsonResponse({
-      success: true,
+    return successResponse({
       messageId: result.messageId,
       status: result.status,
       provider: emailProvider,
       leadId,
+      leadName,
+      persona,
+      tone,
       timestamp: new Date().toISOString()
+    }, {
+      source: hasProviderKey ? 'provider_live' : 'simulated',
+      provider: hasProviderKey ? emailProvider : 'email_simulator',
+      reason: hasProviderKey ? undefined : 'No configured email provider key was available; the send was simulated.',
+      confidence: hasProviderKey ? 0.88 : 0.22
     });
 
   } catch (error) {
     console.error('Error sending email:', error);
-    return errorResponse(error.message || 'Failed to send email');
+    return errorResponse('Failed to send email', 500, {
+      source: 'provider_fallback',
+      provider: process.env.EMAIL_PROVIDER || 'email'
+    });
   }
 }
 

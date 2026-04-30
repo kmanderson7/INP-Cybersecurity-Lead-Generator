@@ -1,279 +1,549 @@
-import { jsonResponse, errorResponse, fetchWithRetry } from '../lib/http.js';
+import { randomUUID } from 'crypto';
+import { jsonResponse, errorResponse, fetchWithRetry, successResponse } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
-import { normalizeCompanyData, calculateScore } from '../lib/normalize.js';
+import { calculateScore, createSignal, getPriority } from '../lib/normalize.js';
+import {
+  attachSignalMeta,
+  getApolloProviderConfig,
+  logProviderEvent,
+  requireLiveDataEnabled
+} from '../lib/source.js';
+import {
+  qualifyTradeFinanceContacts,
+  isTradeFinanceRelevantTitle,
+  TRADE_FINANCE_TITLE_INCLUDE_KEYWORDS
+} from '../lib/tradeFinanceContacts.js';
+
+const APOLLO_BASE_URL = 'https://api.apollo.io/api/v1';
 
 export async function handler(event) {
   if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'POST, OPTIONS' } };
+    return {
+      statusCode: 204,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS'
+      }
+    };
   }
 
   if (event.httpMethod !== 'POST') {
-    return errorResponse('Method Not Allowed', 405);
+    return errorResponse('Method Not Allowed', 405, {
+      provider: 'fetch_leads',
+      source: 'mock'
+    });
   }
 
-  // Rate limiting
   const clientIP = event.headers['client-ip'] || event.headers['x-forwarded-for'] || 'anonymous';
-  const rateCheck = checkRateLimit(clientIP, 50, 60 * 60 * 1000); // 50 requests per hour
-
+  const rateCheck = checkRateLimit(clientIP, 50, 60 * 60 * 1000);
   if (!rateCheck.allowed) {
-    return errorResponse('Rate limit exceeded', 429);
+    return errorResponse('Rate limit exceeded', 429, {
+      provider: 'fetch_leads',
+      source: 'mock'
+    });
   }
+
+  const providerConfig = getApolloProviderConfig();
+  const correlationId = randomUUID();
+  const requestStartedAt = Date.now();
 
   try {
-    const { industry = 'Software', minEmployees = 50, maxEmployees = 1000 } = JSON.parse(event.body || '{}');
+    const {
+      industry = 'Finance',
+      minEmployees = 50,
+      maxEmployees = 1000
+    } = JSON.parse(event.body || '{}');
 
-    // Check cache first
-    const cacheKey = getCacheKey('apollo', 'leads', { industry, minEmployees, maxEmployees });
+    const cacheKey = getCacheKey('apollo', 'trade-finance-leads', {
+      industry,
+      minEmployees,
+      maxEmployees,
+      providerMode: providerConfig.mode
+    });
     const cached = get(cacheKey);
     if (cached) {
       return jsonResponse(cached);
     }
 
-    const apolloKey = process.env.APOLLO_API_KEY;
+    if (!providerConfig.apiKey) {
+      if (requireLiveDataEnabled()) {
+        return errorResponse('Live Apollo lead data is required but Apollo is not configured.', 503, {
+          provider: 'apollo_unconfigured',
+          source: 'mock',
+          correlationId,
+          reason: 'REQUIRE_LIVE_DATA blocked mock fallback because Apollo credentials are missing.'
+        });
+      }
 
-    if (!apolloKey) {
-      console.warn('Apollo API key missing, using mock data');
-      const mockLeads = generateMockLeads(industry, minEmployees, maxEmployees);
-      const result = { success: true, source: 'mock', leads: mockLeads };
-      set(cacheKey, result, 60 * 60 * 1000); // Cache for 1 hour
+      const mockLeads = generateMockLeads(industry, minEmployees, maxEmployees, {
+        source: 'mock',
+        provider: 'mock_catalog',
+        correlationId
+      });
+      const result = {
+        success: true,
+        data: { leads: mockLeads },
+        meta: {
+          source: 'mock',
+          provider: 'mock_catalog',
+          live: false,
+          fallbackUsed: true,
+          reason: 'Apollo credentials missing; returned labeled mock lead dataset.',
+          fetchedAt: new Date().toISOString(),
+          correlationId,
+          confidence: 0.35
+        }
+      };
+
+      set(cacheKey, result, 60 * 60 * 1000);
       return jsonResponse(result);
     }
 
-    // Implement actual Apollo API call
     try {
-      const apolloLeads = await fetchApolloLeads(apolloKey, industry, minEmployees, maxEmployees);
-      if (apolloLeads && apolloLeads.length > 0) {
-        const result = { success: true, source: 'apollo_live', leads: apolloLeads };
-        set(cacheKey, result, 2 * 60 * 60 * 1000); // Cache for 2 hours
-        return jsonResponse(result);
+      const leads = await fetchApolloLeadDataset(
+        providerConfig.apiKey,
+        industry,
+        minEmployees,
+        maxEmployees,
+        {
+          source: providerConfig.source,
+          provider: providerConfig.provider,
+          correlationId
+        }
+      );
+
+      logProviderEvent({
+        functionName: 'fetch-leads',
+        provider: providerConfig.provider,
+        correlationId,
+        startedAt: requestStartedAt,
+        status: 'success'
+      });
+
+      const response = successResponse(
+        { leads },
+        {
+          source: providerConfig.source,
+          provider: providerConfig.provider,
+          correlationId,
+          live: true,
+          fallbackUsed: providerConfig.mode === 'legacy',
+          reason: providerConfig.mode === 'legacy'
+            ? 'APOLLO_LAMINAR_API_KEY missing; used legacy Apollo provider.'
+            : undefined,
+          confidence: 0.84
+        }
+      );
+
+      set(cacheKey, JSON.parse(response.body), 2 * 60 * 60 * 1000);
+      return response;
+    } catch (providerError) {
+      logProviderEvent({
+        functionName: 'fetch-leads',
+        provider: providerConfig.provider,
+        correlationId,
+        startedAt: requestStartedAt,
+        status: 'failure',
+        reason: providerError.message
+      });
+
+      if (requireLiveDataEnabled()) {
+        return errorResponse('Live Apollo lead data is required but the provider request failed.', 503, {
+          provider: providerConfig.provider,
+          source: providerConfig.source,
+          correlationId,
+          reason: 'REQUIRE_LIVE_DATA blocked fallback after Apollo request failure.'
+        });
       }
-    } catch (error) {
-      console.warn('Apollo API failed, falling back to mock data:', error.message);
+
+      const mockLeads = generateMockLeads(industry, minEmployees, maxEmployees, {
+        source: 'apollo_fallback',
+        provider: providerConfig.provider,
+        correlationId
+      });
+
+      const result = {
+        success: true,
+        data: { leads: mockLeads },
+        meta: {
+          source: 'apollo_fallback',
+          provider: providerConfig.provider,
+          live: false,
+          fallbackUsed: true,
+          reason: 'Apollo request failed; returned labeled mock dataset.',
+          fetchedAt: new Date().toISOString(),
+          correlationId,
+          confidence: 0.3
+        }
+      };
+
+      set(cacheKey, result, 60 * 60 * 1000);
+      return jsonResponse(result);
     }
-
-    // Fallback to enhanced mock data when API fails
-    const mockLeads = generateMockLeads(industry, minEmployees, maxEmployees);
-    const result = { success: true, source: 'apollo_fallback', leads: mockLeads };
-
-    set(cacheKey, result);
-    return jsonResponse(result);
-
   } catch (error) {
     console.error('Error in fetch-leads:', error);
-    return errorResponse(error.message || 'Failed to fetch leads');
+    return errorResponse('Failed to fetch leads', 500, {
+      provider: providerConfig.provider,
+      source: providerConfig.source,
+      correlationId,
+      reason: 'Unhandled server error while building lead response.'
+    });
   }
 }
 
-function generateMockLeads(industry, minEmployees, maxEmployees) {
+async function fetchApolloLeadDataset(apiKey, industry, minEmployees, maxEmployees, sourceMeta) {
+  const organizations = await fetchApolloOrganizations(apiKey, industry, minEmployees, maxEmployees);
+
+  if (!organizations.length) {
+    throw new Error('Apollo organization search returned no matching accounts');
+  }
+
+  const domains = organizations
+    .map((org) => org.primary_domain || extractDomain(org.website_url || ''))
+    .filter(Boolean)
+    .slice(0, 25);
+
+  const people = domains.length
+    ? await fetchApolloPeople(apiKey, domains)
+    : [];
+
+  const peopleByOrg = groupPeopleByOrganization(people);
+
+  return organizations.slice(0, 10).map((org, index) =>
+    transformApolloLead(org, peopleByOrg, industry, index, sourceMeta)
+  );
+}
+
+async function fetchApolloOrganizations(apiKey, industry, minEmployees, maxEmployees) {
+  const requestBody = {
+    q_organization_keyword_tags: [industry],
+    organization_num_employees_ranges: [`${minEmployees},${maxEmployees}`],
+    page: 1,
+    per_page: 15
+  };
+
+  const response = await fetchWithRetry(`${APOLLO_BASE_URL}/mixed_companies/search`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache',
+      'X-Api-Key': apiKey
+    },
+    body: JSON.stringify(requestBody)
+  }, 2, 12000);
+
+  const payload = await response.json();
+  const organizations = payload.organizations || payload.accounts || [];
+
+  if (!Array.isArray(organizations)) {
+    throw new Error('Invalid organization response from Apollo');
+  }
+
+  return organizations;
+}
+
+async function fetchApolloPeople(apiKey, domains) {
+  const requestBody = {
+    person_titles: TRADE_FINANCE_TITLE_INCLUDE_KEYWORDS,
+    q_organization_domains: domains,
+    page: 1,
+    per_page: 50
+  };
+
+  const response = await fetchWithRetry(`${APOLLO_BASE_URL}/mixed_people/api_search`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache',
+      'X-Api-Key': apiKey
+    },
+    body: JSON.stringify(requestBody)
+  }, 2, 12000);
+
+  const payload = await response.json();
+  const people = Array.isArray(payload.people) ? payload.people : [];
+
+  return people.filter((person) => isTradeFinanceRelevantTitle(person.title));
+}
+
+function transformApolloLead(org, peopleByOrg, targetIndustry, index, sourceMeta) {
+  const domain = org.primary_domain || extractDomain(org.website_url || '');
+  const companyName = org.name || 'Unknown Company';
+  const contacts = qualifyTradeFinanceContacts(
+    peopleByOrg.get(org.id) || peopleByOrg.get(domain) || [],
+    sourceMeta,
+    companyName
+  );
+
+  const leadSignals = attachSignalMeta(
+    buildFirmographicSignals(org, contacts),
+    sourceMeta
+  );
+
+  const baseScore = calculateBaseScore(org, contacts);
+  const scoring = calculateScore(baseScore, leadSignals, 5, 0);
+
+  const website = org.website_url || (domain ? `https://${domain}` : null);
+  const location = [org.primary_city, org.primary_state, org.country].filter(Boolean).join(', ') || null;
+
+  const lead = {
+    id: `apollo_${org.id || index}`,
+    name: org.name || 'Unknown Company',
+    domain,
+    industry: org.industry || targetIndustry,
+    employees: org.estimated_num_employees || 0,
+    revenue: formatRevenue(org.annual_revenue),
+    location,
+    website,
+    leadScore: scoring.score,
+    priority: scoring.priority,
+    lastContact: null,
+    status: 'New Lead',
+    signals: leadSignals,
+    contacts,
+    executives: contacts,
+    news: [],
+    techStack: org.technologies || [],
+    securityTools: [],
+    concerns: [
+      'Settlement cycle friction',
+      'Liquidity pressure',
+      'Counterparty operational risk'
+    ],
+    recentActivity: [
+      'Apollo organization intelligence refreshed',
+        contacts.length ? `Identified ${contacts.length} qualified trade finance contacts` : 'No qualified trade finance contacts identified yet'
+    ],
+    socialProof: {
+      linkedinFollowers: org.linkedin_followers || null
+    },
+    financials: {
+      funding: org.total_funding ? `$${Math.round(org.total_funding / 1_000_000)}M total raised` : null,
+      lastRound: null,
+      investors: null
+    },
+    explainScore: scoring.explainScore,
+    sourceMeta
+  };
+
+  return lead;
+}
+
+function buildFirmographicSignals(org, contacts) {
+  const signals = [];
+  const domain = org.primary_domain || extractDomain(org.website_url || '') || org.name || 'organization';
+  const evidence = [`Apollo organization profile: ${domain}`];
+
+  if (org.estimated_num_employees >= 250) {
+    signals.push(createSignal(
+      'firmographic_fit',
+      'medium',
+      10,
+      `${org.estimated_num_employees} employees suggests operational complexity across treasury and settlement teams`,
+      evidence
+    ));
+  }
+
+  if (contacts.length > 0) {
+    const topContact = contacts[0];
+    signals.push(createSignal(
+      'buyer_contact',
+      topContact.roleCategory === 'decision_maker' ? 'high' : 'medium',
+      Math.min(25, Math.round(topContact.relevanceScore / 4)),
+      `Identified ${contacts.length} relevant trade finance contacts led by ${topContact.title}`,
+      evidence,
+      { confidence: 0.82 }
+    ));
+  }
+
+  if (org.annual_revenue) {
+    signals.push(createSignal(
+      'firmographic_fit',
+      'low',
+      8,
+      `Apollo firmographics report annual revenue of ${formatRevenue(org.annual_revenue)}`,
+      evidence,
+      { confidence: 0.72 }
+    ));
+  }
+
+  return signals;
+}
+
+function calculateBaseScore(org, contacts) {
+  let score = 42;
+
+  const employees = org.estimated_num_employees || 0;
+  if (employees >= 5000) score += 15;
+  else if (employees >= 1000) score += 12;
+  else if (employees >= 250) score += 8;
+  else if (employees >= 100) score += 5;
+
+  const industry = `${org.industry || ''}`.toLowerCase();
+  if (industry.includes('finance') || industry.includes('bank') || industry.includes('trading')) {
+    score += 12;
+  }
+
+  if (contacts.length > 0) {
+    score += Math.min(18, Math.round(contacts[0].relevanceScore / 6));
+  }
+
+  return Math.min(score, 80);
+}
+
+function groupPeopleByOrganization(people) {
+  const map = new Map();
+
+  for (const person of people) {
+    const org = person.organization || {};
+    const keys = [org.id, org.primary_domain, extractDomain(org.website_url || '')].filter(Boolean);
+
+    for (const key of keys) {
+      if (!map.has(key)) {
+        map.set(key, []);
+      }
+      map.get(key).push(person);
+    }
+  }
+
+  return map;
+}
+
+function generateMockLeads(industry, minEmployees, maxEmployees, sourceMeta) {
   const companies = [
-    'TechGuard Solutions', 'SecureCorp Industries', 'DataShield Systems', 'CyberFront Technologies',
-    'InfoProtect Ltd', 'SafeNet Enterprises', 'DefenseCore Systems', 'ShieldTech Corporation'
+    {
+      name: 'Mercator Settlement Partners',
+      industry: 'Trade Finance',
+      location: 'Houston, TX',
+      domain: 'mercatorsettlement.example',
+      contacts: [
+        { name: 'Avery Patel', title: 'Head of Trade Finance', seniority: 'head', department: 'Trade Finance' },
+        { name: 'Morgan Lee', title: 'Settlement Manager', seniority: 'manager', department: 'Operations' }
+      ]
+    },
+    {
+      name: 'BlueHarbor Treasury Services',
+      industry: 'Treasury Operations',
+      location: 'Chicago, IL',
+      domain: 'blueharbortreasury.example',
+      contacts: [
+        { name: 'Jordan Smith', title: 'Treasurer', seniority: 'vp', department: 'Treasury' },
+        { name: 'Casey Chen', title: 'Middle Office Lead', seniority: 'manager', department: 'Operations' }
+      ]
+    },
+    {
+      name: 'CrossCurrent Commodities',
+      industry: 'Commodity Trading',
+      location: 'Stamford, CT',
+      domain: 'crosscurrentcommodities.example',
+      contacts: [
+        { name: 'Riley Garcia', title: 'CFO', seniority: 'c_suite', department: 'Finance' },
+        { name: 'Alex Khan', title: 'Commodity Operations Manager', seniority: 'manager', department: 'Operations' }
+      ]
+    },
+    {
+      name: 'NorthBridge Payments & Trade',
+      industry: 'Payments',
+      location: 'New York, NY',
+      domain: 'northbridgepayments.example',
+      contacts: [
+        { name: 'Taylor Johnson', title: 'Head of Payments', seniority: 'head', department: 'Payments' },
+        { name: 'Jamie Brooks', title: 'Structured Finance Lead', seniority: 'director', department: 'Structured Finance' }
+      ]
+    },
+    {
+      name: 'Atlas Middle Office Group',
+      industry: 'Trade Operations',
+      location: 'Denver, CO',
+      domain: 'atlasmiddleoffice.example',
+      contacts: [
+        { name: 'Cameron Diaz', title: 'Director of Trade Finance', seniority: 'director', department: 'Trade Finance' },
+        { name: 'Drew Nelson', title: 'Settlement Operations Lead', seniority: 'manager', department: 'Operations' }
+      ]
+    }
   ];
 
-  return companies.slice(0, 5).map((name, i) => {
-    const employeeCount = Math.floor(Math.random() * (maxEmployees - minEmployees)) + minEmployees;
-    const baseScore = 40 + Math.floor(Math.random() * 40);
-    const signals = [];
+  return companies.slice(0, 5).map((company, index) => {
+    const employees = Math.max(
+      minEmployees,
+      Math.min(maxEmployees, minEmployees + 150 + (index * 180))
+    );
+    const contacts = qualifyTradeFinanceContacts(company.contacts, sourceMeta, company.name);
 
-    // Add random signals for more realistic scoring
-    if (Math.random() > 0.5) {
-      signals.push({ type: 'exec_move', scoreImpact: 25, details: 'New CISO hired' });
-    }
-    if (Math.random() > 0.7) {
-      signals.push({ type: 'reg_countdown', scoreImpact: 15, details: 'SOC 2 renewal due' });
-    }
+    const signals = attachSignalMeta([
+      createSignal(
+        'firmographic_fit',
+        'medium',
+        9,
+        `${employees} employees across treasury and trade operations`,
+        [company.domain],
+        { confidence: 0.55 }
+      ),
+      createSignal(
+        'buyer_contact',
+        contacts[0]?.roleCategory === 'decision_maker' ? 'high' : 'medium',
+        Math.min(24, Math.round((contacts[0]?.relevanceScore || 60) / 4)),
+        `Mock contact set includes ${contacts[0]?.title || 'finance contact'} for outreach testing`,
+        [company.domain],
+        { confidence: 0.48 }
+      )
+    ], sourceMeta);
 
-    const scoring = calculateScore(baseScore, signals, Math.random() > 0.5 ? 5 : 0, Math.floor(Math.random() * 3));
+    const scoring = calculateScore(55, signals, 2, 0);
 
     return {
-      id: `apollo_${i + 1}`,
-      name,
-      industry,
-      employees: employeeCount,
-      revenue: `$${Math.floor(Math.random() * 100) + 10}M`,
-      location: ['Austin, TX', 'San Francisco, CA', 'Boston, MA', 'Seattle, WA'][i % 4],
-      website: `https://${name.toLowerCase().replace(/\s+/g, '')}.com`,
+      id: `mock_${index + 1}`,
+      name: company.name,
+      domain: company.domain,
+      industry: company.industry || industry,
+      employees,
+      revenue: `$${25 + index * 15}M`,
+      location: company.location,
+      website: `https://${company.domain}`,
       leadScore: scoring.score,
-      priority: scoring.priority,
+      priority: getPriority(scoring.score),
       lastContact: null,
       status: 'New Lead',
       signals,
-      executives: [{
-        name: ['John Smith', 'Sarah Johnson', 'Mike Chen', 'Lisa Rodriguez'][i % 4],
-        title: ['CISO', 'CTO', 'IT Director', 'VP Security'][i % 4],
-        email: `security@${name.toLowerCase().replace(/\s+/g, '')}.com`
-      }],
-      news: [{
-        date: new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        title: `${name} announces security initiative`,
-        source: 'Industry News'
-      }],
-      techStack: [['AWS', 'React', 'Node.js'], ['Azure', 'Angular', 'C#'], ['GCP', 'Vue.js', 'Python']][i % 3],
-      securityTools: [['Okta', 'CrowdStrike'], ['Microsoft Defender', 'Qualys'], ['Ping Identity', 'SentinelOne']][i % 3],
-      concerns: [['Zero Trust', 'SOC 2'], ['HIPAA Compliance', 'Ransomware'], ['API Security', 'Cloud Security']][i % 3],
-      recentActivity: ['Security assessment completed', 'New security tools evaluated', 'Compliance audit scheduled'],
+      contacts,
+      executives: contacts,
+      news: [],
+      techStack: ['Murex', 'SAP', 'Power BI'],
+      securityTools: [],
+      concerns: ['Settlement exceptions', 'Liquidity visibility', 'Manual reconciliation'],
+      recentActivity: ['Mock dataset loaded for demo continuity'],
       socialProof: {
-        linkedinFollowers: Math.floor(Math.random() * 20000) + 1000,
-        glassdoorRating: (3 + Math.random() * 2).toFixed(1),
-        trustpilotScore: (3 + Math.random() * 2).toFixed(1)
+        linkedinFollowers: 1500 + index * 850
       },
       financials: {
-        funding: `$${Math.floor(Math.random() * 50) + 5}M total raised`,
-        lastRound: `Series ${['A', 'B', 'C'][Math.floor(Math.random() * 3)]}`,
-        investors: ['Tech Investors', 'Growth Capital', 'Strategic Partners'][Math.floor(Math.random() * 3)]
+        funding: null,
+        lastRound: null,
+        investors: null
       },
-      explainScore: scoring.explainScore
+      explainScore: scoring.explainScore,
+      sourceMeta
     };
   });
 }
 
-async function fetchApolloLeads(apiKey, industry, minEmployees, maxEmployees) {
-  const apolloEndpoint = 'https://api.apollo.io/v1/mixed_people/search';
+function formatRevenue(revenue) {
+  if (!revenue) {
+    return null;
+  }
 
-  // Apollo API request body based on their documentation
-  const requestBody = {
-    organization_industry_tag_ids: getIndustryTagIds(industry),
-    organization_num_employees_ranges: [`${minEmployees},${maxEmployees}`],
-    page: 1,
-    per_page: 20, // Limit results
-    person_titles: ['CISO', 'Chief Information Security Officer', 'CTO', 'Chief Technology Officer', 'IT Director', 'VP Security', 'Security Manager'],
-    q_organization_domains: null // No specific domain filter
-  };
+  return `$${Math.round(revenue / 1_000_000)}M`;
+}
+
+function extractDomain(url) {
+  if (!url) {
+    return '';
+  }
 
   try {
-    const response = await fetchWithRetry(apolloEndpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache',
-        'X-Api-Key': apiKey
-      },
-      body: JSON.stringify(requestBody)
-    }, 2, 10000);
-
-    const data = await response.json();
-
-    if (!data.people || !Array.isArray(data.people)) {
-      throw new Error('Invalid response format from Apollo API');
-    }
-
-    // Transform Apollo data to our format
-    const transformedLeads = transformApolloResponse(data.people, industry);
-    return transformedLeads;
-
-  } catch (error) {
-    console.error('Apollo API Error:', error);
-    throw new Error(`Apollo API failed: ${error.message}`);
+    return new URL(url.startsWith('http') ? url : `https://${url}`).hostname.replace(/^www\./, '');
+  } catch {
+    return String(url).replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0];
   }
-}
-
-function getIndustryTagIds(industry) {
-  // Apollo industry tag mapping - these would need to be updated based on actual Apollo API documentation
-  const industryMappings = {
-    'Software': ['5567cd4e73696472b9040000'], // Software Development
-    'Healthcare': ['5567cd4e736964721c040000'], // Healthcare
-    'Finance': ['5567cd4e73696472b9010000'], // Financial Services
-    'Manufacturing': ['5567cd4e73696472b9020000'], // Manufacturing
-    'Retail': ['5567cd4e73696472b9030000'], // Retail
-    'Education': ['5567cd4e73696472b9040000'], // Education
-    'Government': ['5567cd4e73696472b9050000'], // Government
-    'Energy': ['5567cd4e73696472b9060000'], // Energy
-    'Real Estate': ['5567cd4e73696472b9070000'], // Real Estate
-    'Legal': ['5567cd4e73696472b9080000'], // Legal
-    'Technology': ['5567cd4e73696472b9090000'] // Technology
-  };
-
-  return industryMappings[industry] || industryMappings['Software'];
-}
-
-function transformApolloResponse(apolloPeople, targetIndustry) {
-  const companiesMap = new Map();
-
-  // Group people by organization
-  apolloPeople.forEach(person => {
-    if (!person.organization) return;
-
-    const org = person.organization;
-    const orgId = org.id;
-
-    if (!companiesMap.has(orgId)) {
-      // Generate base scoring
-      const baseScore = 40 + Math.floor(Math.random() * 40);
-      const signals = [];
-
-      // Add signals based on Apollo data
-      if (person.title && (person.title.toLowerCase().includes('ciso') || person.title.toLowerCase().includes('security'))) {
-        signals.push({ type: 'target_role', scoreImpact: 25, details: `Has ${person.title}` });
-      }
-
-      const scoring = calculateScore(baseScore, signals, 5, 0); // Fresh data bonus
-
-      companiesMap.set(orgId, {
-        id: `apollo_${orgId}`,
-        name: org.name || 'Unknown Company',
-        industry: targetIndustry,
-        employees: org.estimated_num_employees || Math.floor(Math.random() * 1000) + 50,
-        revenue: org.annual_revenue ? `$${Math.round(org.annual_revenue / 1000000)}M` : `$${Math.floor(Math.random() * 100) + 10}M`,
-        location: `${org.primary_city || 'Unknown'}, ${org.primary_state || 'Unknown'}`,
-        website: org.website_url || `https://${org.name?.toLowerCase().replace(/\s+/g, '') || 'company'}.com`,
-        leadScore: scoring.score,
-        priority: scoring.priority,
-        lastContact: null,
-        status: 'New Lead',
-        signals,
-        executives: [],
-        news: [{
-          date: new Date().toISOString().split('T')[0],
-          title: `${org.name} leadership identified via Apollo intelligence`,
-          source: 'Apollo API'
-        }],
-        techStack: org.technologies || ['Unknown'],
-        securityTools: [],
-        concerns: generateIndustryConcerns(targetIndustry),
-        recentActivity: ['Identified via Apollo API', 'Contact information verified'],
-        socialProof: {
-          linkedinFollowers: org.linkedin_followers || Math.floor(Math.random() * 20000) + 1000,
-          glassdoorRating: (3 + Math.random() * 2).toFixed(1),
-          trustpilotScore: (3 + Math.random() * 2).toFixed(1)
-        },
-        financials: {
-          funding: org.annual_revenue ? `Revenue: $${Math.round(org.annual_revenue / 1000000)}M` : 'Private company',
-          lastRound: 'Information not available',
-          investors: 'Information not available'
-        },
-        explainScore: scoring.explainScore
-      });
-    }
-
-    // Add executive to company
-    const company = companiesMap.get(orgId);
-    if (person.email && person.first_name && person.last_name) {
-      company.executives.push({
-        name: `${person.first_name} ${person.last_name}`,
-        title: person.title || 'Executive',
-        email: person.email
-      });
-    }
-  });
-
-  return Array.from(companiesMap.values()).slice(0, 10); // Return up to 10 companies
-}
-
-function generateIndustryConcerns(industry) {
-  const concernMappings = {
-    'Healthcare': ['HIPAA compliance', 'Patient data security', 'Medical device security'],
-    'Finance': ['PCI DSS compliance', 'SOX compliance', 'Customer data protection'],
-    'Software': ['API security', 'Customer data privacy', 'Cloud security posture'],
-    'Manufacturing': ['OT security', 'Supply chain security', 'Industrial IoT protection'],
-    'Retail': ['PCI compliance', 'Customer data privacy', 'E-commerce security'],
-    'Education': ['FERPA compliance', 'Student data protection', 'Campus network security'],
-    'Government': ['FISMA compliance', 'Citizen data protection', 'Critical infrastructure'],
-    'Energy': ['NERC CIP compliance', 'Critical infrastructure protection', 'OT/IT convergence'],
-    'Real Estate': ['Customer data privacy', 'Financial transaction security', 'IoT security'],
-    'Legal': ['Attorney-client privilege protection', 'Document security', 'Confidentiality'],
-    'Technology': ['Zero-trust architecture', 'Cloud security', 'API security']
-  };
-
-  return concernMappings[industry] || ['Cybersecurity posture', 'Data protection', 'Compliance requirements'];
 }

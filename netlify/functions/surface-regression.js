@@ -1,7 +1,8 @@
-import { jsonResponse, errorResponse, fetchWithRetry } from '../lib/http.js';
+import { jsonResponse, errorResponse, fetchWithRetry, successResponse } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
 import { createSignal } from '../lib/normalize.js';
+import { attachSignalMeta } from '../lib/source.js';
 
 export async function handler(event) {
   if (event.httpMethod === 'OPTIONS') {
@@ -32,15 +33,33 @@ export async function handler(event) {
       return jsonResponse(cached);
     }
 
-    const signals = await detectSurfaceRegression(domain);
-    const result = { success: true, signals, source: 'surface_intelligence' };
+    const signals = attachSignalMeta(
+      await detectSurfaceRegression(domain),
+      {
+        source: 'provider_fallback',
+        provider: 'attack_surface_checks',
+        confidence: 0.57
+      }
+    );
+    const response = successResponse(
+      { signals },
+      {
+        source: 'provider_fallback',
+        provider: 'attack_surface_checks',
+        reason: 'Surface regression mixes live checks with simulated subdomain monitoring.',
+        confidence: 0.57
+      }
+    );
 
-    set(cacheKey, result, 6 * 60 * 60 * 1000); // Cache for 6 hours
-    return jsonResponse(result);
+    set(cacheKey, JSON.parse(response.body), 6 * 60 * 60 * 1000);
+    return response;
 
   } catch (error) {
     console.error('Error in surface-regression:', error);
-    return errorResponse(error.message || 'Failed to analyze attack surface');
+    return errorResponse('Failed to analyze attack surface', 500, {
+      source: 'provider_fallback',
+      provider: 'attack_surface_checks'
+    });
   }
 }
 

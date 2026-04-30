@@ -1,3 +1,5 @@
+import { wrapError, wrapSuccess } from './source.js';
+
 export async function fetchWithRetry(url, options = {}, retries = 3, timeoutMs = 15000) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -57,6 +59,10 @@ export function jsonResponse(body, statusCode = 200) {
   };
 }
 
-export function errorResponse(message, statusCode = 500) {
-  return jsonResponse({ error: message, success: false }, statusCode);
+export function successResponse(data, metaOptions = {}, statusCode = 200) {
+  return jsonResponse(wrapSuccess(data, metaOptions), statusCode);
+}
+
+export function errorResponse(message, statusCode = 500, metaOptions = {}) {
+  return jsonResponse(wrapError(message, metaOptions), statusCode);
 }

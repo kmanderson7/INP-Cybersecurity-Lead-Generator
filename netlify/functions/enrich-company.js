@@ -1,20 +1,42 @@
 // netlify/functions/enrich-company.js
 import OpenAI from "openai";
+import { errorResponse, successResponse } from '../lib/http.js';
+import { requireLiveDataEnabled } from '../lib/source.js';
 
 export async function handler(event) {
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: corsHeaders() };
   }
   if (event.httpMethod !== "POST") {
-    return json({ error: "Method Not Allowed" }, 405);
+    return errorResponse('Method Not Allowed', 405, { provider: 'company_enrichment', source: 'mock' });
   }
 
   const { domain } = JSON.parse(event.body || "{}");
-  if (!domain) return json({ success: false, error: "domain is required" }, 400);
+  if (!domain) {
+    return errorResponse('domain is required', 400, { provider: 'company_enrichment', source: 'mock' });
+  }
 
   const openAiKey = process.env.OPENAI_API_KEY;
   console.log("OpenAI key loaded:", openAiKey ? "✅" : "❌ missing");
-  if (!openAiKey) return json({ success: false, error: "Missing OpenAI API key" }, 500);
+  if (!openAiKey) {
+    if (requireLiveDataEnabled()) {
+      return errorResponse('Live company enrichment is required but OpenAI is not configured.', 503, {
+        provider: 'openai',
+        source: 'mock',
+        reason: 'REQUIRE_LIVE_DATA blocked mock company enrichment.'
+      });
+    }
+
+    return successResponse({
+      domain,
+      analysis: buildMockAnalysis()
+    }, {
+      provider: 'company_enrichment_mock',
+      source: 'mock',
+      reason: 'OpenAI API key missing; returned labeled mock enrichment analysis.',
+      confidence: 0.25
+    });
+  }
 
   try {
     // 1) Fetch HTML from the company site
@@ -49,8 +71,7 @@ ${html.slice(0, 120000)}`
 
     const parsed = safeParse(completion.choices?.[0]?.message?.content);
 
-    return json({
-      success: true,
+    return successResponse({
       domain: url,
       analysis: parsed || {
         frontEnd: [],
@@ -63,10 +84,17 @@ ${html.slice(0, 120000)}`
         confidence: 0,
         summary: "No structured analysis returned."
       }
+    }, {
+      provider: 'openai',
+      source: 'ai_synthesized',
+      confidence: typeof parsed?.confidence === 'number' ? Math.max(0, Math.min(1, parsed.confidence / 100)) : 0.62
     });
   } catch (err) {
     console.error(err);
-    return json({ success: false, error: err.message }, 500);
+    return errorResponse('Failed to enrich company', 500, {
+      provider: 'openai',
+      source: 'ai_synthesized'
+    });
   }
 }
 
@@ -77,13 +105,20 @@ function corsHeaders() {
     "Access-Control-Allow-Methods": "POST, OPTIONS"
   };
 }
-function json(body, statusCode = 200) {
-  return {
-    statusCode,
-    headers: { "Content-Type": "application/json", ...corsHeaders() },
-    body: JSON.stringify(body)
-  };
-}
 function safeParse(s) {
   try { return JSON.parse(s); } catch { return null; }
+}
+
+function buildMockAnalysis() {
+  return {
+    frontEnd: [],
+    backEnd: [],
+    cms: [],
+    hosting: [],
+    analytics: [],
+    securityTools: [],
+    signals: ['Mock enrichment only: no live site analysis performed'],
+    confidence: 20,
+    summary: 'Company enrichment is running in mock mode because OpenAI is not configured.'
+  };
 }

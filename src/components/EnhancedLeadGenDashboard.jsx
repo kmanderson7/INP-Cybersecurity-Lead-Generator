@@ -5,6 +5,18 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import {
+  decorateLeadWithMeta,
+  getSourceBadge,
+  getSourceWarning,
+  isNonLiveMeta,
+  normalizeApiPayload
+} from '@/lib/sourceMeta';
+import { loadLeadState, saveLeadState } from '@/lib/storage/leadStore';
+import { loadSegmentState, saveSegmentState } from '@/lib/storage/segmentStore';
+import { loadSequenceState, saveSequenceState } from '@/lib/storage/sequenceStore';
+import { loadOutreachState, saveOutreachState } from '@/lib/storage/outreachStore';
+import { qualifyTradeFinanceContacts } from '../../netlify/lib/tradeFinanceContacts.js';
 import ExecutiveDashboard from './ExecutiveDashboard';
 import CalendarScheduler from './CalendarScheduler';
 import BulkEmail from './BulkEmail';
@@ -69,14 +81,14 @@ const netlifyAPI = {
         const msg = data?.error || data?.message || `HTTP ${res.status}`;
         throw new Error(msg);
       }
-      return data;
+      return normalizeApiPayload(data);
     } finally {
       clearTimeout(id);
     }
   },
 
   async fetchLeads(criteria) {
-    return this._postJSON('/.netlify/functions/fetch-leads', { ...criteria, source: 'apollo' });
+    return this._postJSON('/.netlify/functions/fetch-leads', criteria);
   },
 
   async fetchNewsLeads(criteria) {
@@ -89,7 +101,7 @@ const netlifyAPI = {
       keywords,
       page: opts.page ?? 1,
       perPage: opts.perPage ?? 25,
-      scoringProfile: opts.scoringProfile ?? 'cybersecurity',
+      scoringProfile: opts.scoringProfile ?? 'commodity_trading',
     });
   },
 
@@ -99,7 +111,7 @@ const netlifyAPI = {
       domains,
       page: opts.page ?? 1,
       perPage: opts.perPage ?? 25,
-      scoringProfile: opts.scoringProfile ?? 'cybersecurity',
+      scoringProfile: opts.scoringProfile ?? 'commodity_trading',
     });
   },
 
@@ -110,7 +122,7 @@ const netlifyAPI = {
       organizationName: params.organizationName,
       linkedinUrl: params.linkedinUrl,
       email: params.email,
-      scoringProfile: params.scoringProfile ?? 'cybersecurity',
+      scoringProfile: params.scoringProfile ?? 'commodity_trading',
     });
   },
 
@@ -168,7 +180,7 @@ const netlifyAPI = {
     return this._postJSON('/.netlify/functions/saas-consolidation', { domain, company });
   },
 
-  async sendEmail(to, subject, body, leadId, persona = 'CISO', tone = 'professional') {
+  async sendEmail(to, subject, body, leadId, persona = 'CFO', tone = 'professional') {
     return this._postJSON('/.netlify/functions/send-email', {
       to, subject, body, leadId, persona, tone
     });
@@ -179,7 +191,26 @@ const netlifyAPI = {
       leadId, contactInfo, timeSlot
     });
   },
+
+  async getIntegrationHealth() {
+    const res = await fetch('/.netlify/functions/integration-health');
+    const text = await res.text();
+    const payload = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      throw new Error(payload?.error || `HTTP ${res.status}`);
+    }
+    return normalizeApiPayload(payload);
+  }
 };
+
+const flattenOutreachHistory = (companies = []) =>
+  companies.flatMap((company) =>
+    (company.outreachHistory || []).map((entry) => ({
+      ...entry,
+      companyId: company.id,
+      companyName: company.name
+    }))
+  );
 
 const EnhancedLeadGenDashboard = () => {
   const [companies, setCompanies] = useState([]);
@@ -201,14 +232,18 @@ const EnhancedLeadGenDashboard = () => {
     to: '',
     subject: '',
     body: '',
-    persona: 'CISO',
+    persona: 'CFO',
     tone: 'professional'
   });
   const [emailSending, setEmailSending] = useState(false);
+  const [lastEmailResult, setLastEmailResult] = useState(null);
 
   // separate loading flags (no cross-locking)
   const [loadingApollo, setLoadingApollo] = useState(false);
   const [loadingNews, setLoadingNews] = useState(false);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [integrationHealth, setIntegrationHealth] = useState([]);
+  const [storageHydrated, setStorageHydrated] = useState(false);
 
   // Tech Analysis
   const [analysis, setAnalysis] = useState(null);
@@ -216,7 +251,7 @@ const EnhancedLeadGenDashboard = () => {
   const [analysisError, setAnalysisError] = useState(null);
 
   // Apollo Prospector (keyword company search, title-based people search, person enrichment)
-  const [apolloProfile, setApolloProfile] = useState('cybersecurity');
+  const [apolloProfile, setApolloProfile] = useState('commodity_trading');
   const [apolloKeywordsInput, setApolloKeywordsInput] = useState('');
   const [apolloTitlesInput, setApolloTitlesInput] = useState('');
   const [apolloDomainsInput, setApolloDomainsInput] = useState('');
@@ -241,38 +276,50 @@ const EnhancedLeadGenDashboard = () => {
   const [showSaveSegmentModal, setShowSaveSegmentModal] = useState(false);
   const [segmentName, setSegmentName] = useState('');
   const [activeSegment, setActiveSegment] = useState(null);
+  const [activityTimeline, setActivityTimeline] = useState([]);
 
   // Kanban view state
   const [draggedCompany, setDraggedCompany] = useState(null);
   const [dragOverColumn, setDragOverColumn] = useState(null);
 
   // Outreach Engine v2 state
-  const [outreachPersona, setOutreachPersona] = useState('CISO');
+  const [outreachPersona, setOutreachPersona] = useState('CFO');
   const [outreachTone, setOutreachTone] = useState('formal');
   const [outreachVariants, setOutreachVariants] = useState([]);
   const [selectedVariant, setSelectedVariant] = useState(0);
+  const [savedOutreachTemplates, setSavedOutreachTemplates] = useState([]);
+  const [variantsByCompany, setVariantsByCompany] = useState({});
 
   // Light Sequencing state
   const [sequences, setSequences] = useState([]);
   const [showSequenceModal, setShowSequenceModal] = useState(false);
   const [selectedSequenceCompany, setSelectedSequenceCompany] = useState(null);
 
-  // Load saved segments from localStorage on component mount
-  useEffect(() => {
-    const saved = localStorage.getItem('leadgen-saved-segments');
-    if (saved) {
-      try {
-        setSavedSegments(JSON.parse(saved));
-      } catch (error) {
-        console.error('Failed to load saved segments:', error);
-      }
-    }
+  const appendActivityEvent = useCallback((event) => {
+    const normalizedEvent = {
+      id: event.id || `activity_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: event.timestamp || new Date().toISOString(),
+      category: event.category || 'activity',
+      companyId: event.companyId || null,
+      companyName: event.companyName || null,
+      title: event.title || 'Activity captured',
+      detail: event.detail || ''
+    };
+
+    setActivityTimeline((prev) => [normalizedEvent, ...prev].slice(0, 100));
   }, []);
 
-  // Save segments to localStorage whenever they change
-  useEffect(() => {
-    localStorage.setItem('leadgen-saved-segments', JSON.stringify(savedSegments));
-  }, [savedSegments]);
+  const refreshIntegrationHealth = useCallback(async () => {
+    setHealthLoading(true);
+    try {
+      const health = await netlifyAPI.getIntegrationHealth();
+      setIntegrationHealth(health?.providers || []);
+    } catch (error) {
+      console.error('Failed to load integration health:', error);
+    } finally {
+      setHealthLoading(false);
+    }
+  }, []);
 
   const getCurrentFilters = () => {
     return {
@@ -428,12 +475,12 @@ const EnhancedLeadGenDashboard = () => {
   };
 
   const openEmailModal = (company) => {
-    const executive = company.executives?.[0];
+    const executive = getPrimaryContact(company);
     setEmailData({
       to: executive?.email || '',
-      subject: `Cybersecurity consultation for ${company.name}`,
-      body: generatePersonalizedEmail(company, 'CISO', 'professional'),
-      persona: 'CISO',
+      subject: `Settlement workflow review for ${company.name}`,
+      body: generatePersonalizedEmail(company, 'CFO', 'professional'),
+      persona: 'CFO',
       tone: 'professional'
     });
     setShowEmailModal(true);
@@ -460,6 +507,14 @@ const EnhancedLeadGenDashboard = () => {
       }
       return company;
     }));
+
+    appendActivityEvent({
+      category: 'meeting',
+      companyId: leadId,
+      companyName: selectedCompany?.name || null,
+      title: 'Meeting scheduled',
+      detail: `${meetingData.date} at ${meetingData.time}`
+    });
 
     // Show success message
     alert(`Meeting scheduled successfully! Calendar invite will be sent to ${selectedCompany?.executives?.[0]?.email || 'the contact'}.`);
@@ -552,7 +607,7 @@ const EnhancedLeadGenDashboard = () => {
       });
     };
 
-    return activities.map((activity, index) => {
+    return activities.map((activity) => {
       const IconComponent = activity.icon;
       return (
         <div
@@ -647,6 +702,11 @@ const EnhancedLeadGenDashboard = () => {
             </CardTitle>
           </CardHeader>
           <CardContent>
+            {getSourceWarning(company.sourceMeta) && (
+              <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {getSourceWarning(company.sourceMeta)}
+              </div>
+            )}
             <div className="flex gap-4 mb-4">
               <div className="flex items-center gap-2">
                 <Filter className="w-4 h-4" />
@@ -713,6 +773,9 @@ const EnhancedLeadGenDashboard = () => {
                           <Badge className={`text-xs ${getSeverityColor(signal.severity)}`}>
                             {signal.severity.toUpperCase()}
                           </Badge>
+                          <Badge variant="outline" className={`text-[10px] ${getSourceBadge(signal.meta).className}`}>
+                            {getSourceBadge(signal.meta).label}
+                          </Badge>
                           <span className={`text-xs ${getScoreImpactColor(signal.scoreImpact)}`}>
                             +{signal.scoreImpact} score
                           </span>
@@ -720,7 +783,7 @@ const EnhancedLeadGenDashboard = () => {
                         <p className="text-sm text-gray-700 mb-2">{signal.details}</p>
                         <div className="text-xs text-gray-500">
                           {new Date(signal.occurredAt).toLocaleDateString()} •
-                          Confidence: {signal.confidence || 'medium'}
+                          Confidence: {Math.round((signal.confidence || 0) * 100)}%
                         </div>
                         {signal.evidence && signal.evidence.length > 0 && (
                           <details className="mt-2">
@@ -832,6 +895,7 @@ const EnhancedLeadGenDashboard = () => {
 
   const renderScoreExplanation = (company) => {
     const breakdown = calculateScoreBreakdown(company);
+    const hasNonLiveSignals = breakdown.signals.some((signal) => isNonLiveMeta(signal.meta));
 
     return (
       <div className="absolute top-full right-0 mt-2 w-80 bg-white border rounded-lg shadow-lg z-50 p-4">
@@ -845,6 +909,7 @@ const EnhancedLeadGenDashboard = () => {
           </button>
         </div>
 
+        <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">Top 3 score drivers</div>
         <div className="space-y-2 mb-3">
           {breakdown.breakdown.map((item, index) => (
             <div key={index} className="flex justify-between items-center py-1">
@@ -870,9 +935,15 @@ const EnhancedLeadGenDashboard = () => {
           </div>
         </div>
 
+        {hasNonLiveSignals && (
+          <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-2 py-2 text-xs text-amber-800">
+            Score includes fallback or AI-generated intelligence.
+          </div>
+        )}
+
         <div className="mt-3 text-xs text-gray-500">
           <p>• Base score from industry, size, and activity</p>
-          <p>• Signal impacts include recent security indicators</p>
+          <p>• Signal impacts reflect urgency across finance and operations</p>
           <p>• Freshness boost for recent updates (72h)</p>
         </div>
       </div>
@@ -892,29 +963,37 @@ const EnhancedLeadGenDashboard = () => {
       topSignals.forEach(signal => {
         switch (signal.type) {
           case 'reg_countdown':
-            whyNow.push('Regulatory compliance deadline approaching');
-            risksWaiting.push('Potential fines and compliance violations');
+            whyNow.push('A compliance milestone is approaching');
+            risksWaiting.push('Delay raises audit and process risk');
             break;
           case 'workforce_stress':
-            whyNow.push('Security team is understaffed and stressed');
-            whatFirst.push('Assess current security staffing gaps');
+            whyNow.push('Open roles suggest team strain in finance operations');
+            whatFirst.push('Map where staffing gaps are slowing throughput');
             break;
           case 'board_heat':
-            whyNow.push('Board is actively discussing cybersecurity');
-            whatFirst.push('Prepare executive cybersecurity briefing');
+            whyNow.push('Leadership attention is already on operational risk');
+            whatFirst.push('Prepare an executive view of timing, friction, and impact');
             break;
           case 'breach_proximity':
-            whyNow.push('Recent security incidents in industry');
-            risksWaiting.push('Increased likelihood of targeted attacks');
+            whyNow.push('External disruption raises urgency to tighten controls');
+            risksWaiting.push('Counterparty and process exposure can spread quickly');
             break;
           case 'darkweb':
-            whyNow.push('Company data found on dark web');
-            whatFirst.push('Immediate credential reset and monitoring');
-            risksWaiting.push('Credential stuffing and account takeover risks');
+            whyNow.push('Sensitive data exposure increases control pressure');
+            whatFirst.push('Review access, counterparties, and exception handling');
+            risksWaiting.push('Operational disruption can spill into settlements');
             break;
           case 'ins_renewal':
-            whyNow.push('Cyber insurance renewal approaching');
-            whatFirst.push('Security control gap assessment');
+            whyNow.push('Insurance timing can force faster control reviews');
+            whatFirst.push('Review control gaps before renewal discussions');
+            break;
+          case 'exec_move':
+            whyNow.push('New finance leadership often reopens workflow decisions');
+            whatFirst.push('Align outreach to current capital and timing priorities');
+            break;
+          case 'rfp':
+            whyNow.push('Active procurement suggests a live buying window');
+            risksWaiting.push('A vendor decision may close without your input');
             break;
         }
       });
@@ -922,23 +1001,23 @@ const EnhancedLeadGenDashboard = () => {
 
     // Add default recommendations based on company profile
     if (company.industry === 'Healthcare') {
-      whatFirst.push('HIPAA compliance review');
-      risksWaiting.push('PHI exposure and regulatory penalties');
+      whatFirst.push('Review document flow and exception handling for regulated approvals');
+      risksWaiting.push('Manual delays can slow approvals and increase compliance exposure');
     } else if (company.industry === 'Finance') {
-      whatFirst.push('PCI DSS and SOX compliance check');
-      risksWaiting.push('Financial data breach consequences');
+      whatFirst.push('Review liquidity drag, reconciliation delays, and approval bottlenecks');
+      risksWaiting.push('Working capital remains tied up in avoidable friction');
     }
 
     if (company.employees > 1000) {
-      whatFirst.push('Enterprise security architecture review');
+      whatFirst.push('Prioritize one enterprise workflow with measurable capital impact');
     } else {
-      whatFirst.push('Security awareness training program');
+      whatFirst.push('Tighten one team workflow before scaling the program');
     }
 
     // Ensure we have content for each card
-    if (whyNow.length === 0) whyNow.push('Proactive security investment timing');
-    if (whatFirst.length === 0) whatFirst.push('Security posture assessment');
-    if (risksWaiting.length === 0) risksWaiting.push('Increased cyber threat exposure');
+    if (whyNow.length === 0) whyNow.push('Current operating pressure creates a useful window for change');
+    if (whatFirst.length === 0) whatFirst.push('Assess settlement timing, liquidity drag, and workflow bottlenecks');
+    if (risksWaiting.length === 0) risksWaiting.push('Manual friction and hidden timing risk continue to compound');
 
     return {
       whyNow: whyNow.slice(0, 3),
@@ -999,10 +1078,24 @@ const EnhancedLeadGenDashboard = () => {
   };
 
   const generateSignalsForCompany = (company) => {
-    // This would normally come from the actual signal functions
-    // For now, generating sample signals based on company data
+    if (Array.isArray(company?.signals) && company.signals.length > 0) {
+      return company.signals
+        .map((signal) => ({
+          ...signal,
+          meta: signal.meta || company.sourceMeta
+        }))
+        .sort((a, b) => new Date(b.occurredAt) - new Date(a.occurredAt));
+    }
+
+    // Preserve demo continuity, but label the synthesized local demo signals clearly.
     const signals = [];
-    const domain = company.domain || 'example.com';
+    const demoMeta = {
+      source: 'mock',
+      provider: 'local_demo',
+      live: false,
+      fallbackUsed: true,
+      reason: 'No server-side signals were available; local demo signals are being shown.'
+    };
 
     // Add some sample signals based on company characteristics
     if (company.industry === 'Healthcare') {
@@ -1013,8 +1106,9 @@ const EnhancedLeadGenDashboard = () => {
         scoreImpact: 30,
         occurredAt: new Date().toISOString(),
         details: 'HIPAA compliance audit due in 45 days',
-        confidence: 'high',
-        evidence: ['Compliance calendar reviewed', 'Previous audit cycle analysis', 'Industry regulatory timeline']
+        confidence: 0.72,
+        evidence: ['Compliance calendar reviewed', 'Previous audit cycle analysis', 'Industry regulatory timeline'],
+        meta: demoMeta
       });
     }
 
@@ -1025,9 +1119,10 @@ const EnhancedLeadGenDashboard = () => {
         severity: 'medium',
         scoreImpact: 20,
         occurredAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-        details: '3 open CISO positions, average 67 days open',
-        confidence: 'medium',
-        evidence: ['LinkedIn job postings', 'Company career page', 'Industry hiring trends']
+        details: '3 open trade finance roles, average 67 days open',
+        confidence: 0.58,
+        evidence: ['LinkedIn job postings', 'Company career page', 'Industry hiring trends'],
+        meta: demoMeta
       });
     }
 
@@ -1039,8 +1134,9 @@ const EnhancedLeadGenDashboard = () => {
         scoreImpact: 25,
         occurredAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
         details: 'Cybersecurity mentioned 4 times in recent earnings call',
-        confidence: 'high',
-        evidence: ['Earnings call transcript', 'Board meeting minutes', 'Executive statements']
+        confidence: 0.68,
+        evidence: ['Earnings call transcript', 'Board meeting minutes', 'Executive statements'],
+        meta: demoMeta
       });
     }
 
@@ -1053,8 +1149,9 @@ const EnhancedLeadGenDashboard = () => {
         scoreImpact: 15,
         occurredAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
         details: 'Vendor security incident affects similar companies',
-        confidence: 'medium',
-        evidence: ['Industry threat intelligence', 'Vendor security bulletins', 'Peer company analysis']
+        confidence: 0.51,
+        evidence: ['Industry threat intelligence', 'Vendor security bulletins', 'Peer company analysis'],
+        meta: demoMeta
       },
       {
         id: 'consolidation-1',
@@ -1063,50 +1160,82 @@ const EnhancedLeadGenDashboard = () => {
         scoreImpact: 12,
         occurredAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
         details: '23% potential savings from tool consolidation',
-        confidence: 'high',
-        evidence: ['Technology stack analysis', 'Vendor overlap assessment', 'Cost optimization opportunities']
+        confidence: 0.6,
+        evidence: ['Technology stack analysis', 'Vendor overlap assessment', 'Cost optimization opportunities'],
+        meta: demoMeta
       }
     );
 
     return signals.sort((a, b) => new Date(b.occurredAt) - new Date(a.occurredAt));
   };
 
-  const generatePersonalizedEmail = (company, persona, tone) => {
-    const executive = company.executives?.[0];
-    const executiveTitle = executive?.title || 'IT Decision Maker';
+  const getSortedContacts = (company) => {
+    const contacts = company?.contacts || company?.executives || [];
+    return [...contacts].sort((a, b) => {
+      if (a.priorityRank && b.priorityRank) {
+        return a.priorityRank - b.priorityRank;
+      }
+      return (b.relevanceScore || 0) - (a.relevanceScore || 0);
+    });
+  };
 
-    const toneStyles = {
-      professional: 'formal and respectful',
-      casual: 'friendly and approachable',
-      urgent: 'direct and time-sensitive'
-    };
+  const getPrimaryContact = (company) => getSortedContacts(company)[0];
+
+  const getRoleCategoryLabel = (roleCategory) => {
+    if (roleCategory === 'decision_maker') return 'Decision Maker';
+    if (roleCategory === 'operator') return 'Operator';
+    if (roleCategory === 'influencer') return 'Influencer';
+    if (roleCategory === 'low_priority') return 'Low Priority';
+    if (roleCategory === 'ignore') return 'Ignored';
+    return 'Contact';
+  };
+
+  const groupContactsByRole = (company) => {
+    const contacts = getSortedContacts(company);
+    return [
+      { key: 'decision_maker', label: 'Decision Makers', contacts: contacts.filter((contact) => contact.roleCategory === 'decision_maker') },
+      { key: 'operator', label: 'Operators', contacts: contacts.filter((contact) => contact.roleCategory === 'operator') },
+      { key: 'influencer', label: 'Influencers', contacts: contacts.filter((contact) => contact.roleCategory === 'influencer') }
+    ];
+  };
+
+  const generatePersonalizedEmail = (company, persona, tone) => {
+    const executive = getPrimaryContact(company);
+    const executiveTitle = executive?.title || 'Finance Decision Maker';
+    const toneContext = tone === 'urgent'
+      ? 'This is time-sensitive because small delays can compound quickly in settlement workflows.'
+      : tone === 'casual'
+        ? 'This may be worth a quick comparison against how peer teams are operating today.'
+        : 'I wanted to keep this concise and grounded in operating impact.';
 
     const personaFocus = {
-      CISO: 'security strategy and risk management',
-      CTO: 'technology infrastructure and innovation',
-      COO: 'operational efficiency and business continuity',
-      CFO: 'cost optimization and business value'
+      CFO: 'capital efficiency, liquidity planning, and settlement risk',
+      'Head of Trade Finance': 'process friction, document delays, and settlement timing',
+      'Settlement Manager': 'reconciliation quality, exception handling, and manual workflow risk',
+      'Operations Lead': 'daily operational bottlenecks, timing gaps, and tooling friction'
     };
 
     return `Dear ${executive?.name || executiveTitle},
 
-I hope this email finds you well. I'm reaching out regarding cybersecurity opportunities that could benefit ${company.name}.
+I’m reaching out because ${company.name} appears to have meaningful trade finance and settlement complexity that often creates avoidable working-capital drag.
 
-Based on our research, we've identified several areas where ${company.name} might strengthen its security posture:
+Based on our research, we see a few areas worth reviewing:
 
 ${company.concerns?.slice(0, 2).map(concern => `• ${concern}`).join('\n')}
 
-Given your role in ${personaFocus[persona]} at ${company.name}, I believe a brief conversation about your current security initiatives would be valuable.
+Given your role in ${personaFocus[persona]} at ${company.name}, a brief conversation about current operating friction could be useful.
 
-Our team has helped similar ${company.industry.toLowerCase()} organizations with ${company.employees} employees enhance their security frameworks while optimizing costs and improving operational efficiency.
+${toneContext}
 
-Would you be available for a 15-minute call next week to discuss how we might support ${company.name}'s security objectives?
+Our team helps firms reduce settlement friction, improve liquidity visibility, and tighten operational controls without adding more manual overhead.
+
+Would you be open to a 15-minute call next week to compare notes on settlement risk, process friction, and working-capital impact?
 
 Best regards,
 [Your Name]
-INP² Security Solutions
+Laminar Digital
 
-P.S. I noticed ${company.name} is using ${company.securityTools?.[0] || 'various security tools'} - I'd be happy to share insights on how organizations are optimizing their security stack in the current threat landscape.`;
+P.S. If helpful, I can share examples of where teams typically uncover reconciliation delays, approval bottlenecks, and liquidity leakage in similar operating models.`;
   };
 
   const sendEmail = async () => {
@@ -1127,7 +1256,8 @@ P.S. I noticed ${company.name} is using ${company.securityTools?.[0] || 'various
       );
 
       if (result?.success) {
-        alert('Email sent successfully!');
+        setLastEmailResult(result);
+        alert(result?.meta?.source === 'simulated' ? 'Email simulated successfully.' : 'Email sent successfully.');
         setShowEmailModal(false);
         // Log the communication
         console.log('Email sent:', result);
@@ -1258,18 +1388,28 @@ P.S. I noticed ${company.name} is using ${company.securityTools?.[0] || 'various
 
     setOutreachVariants(variants);
     setSelectedVariant(0);
-  }, [outreachPersona, outreachTone]);
+    setVariantsByCompany(prev => ({
+      ...prev,
+      [company.id]: variants
+    }));
+    appendActivityEvent({
+      category: 'outreach',
+      companyId: company.id,
+      companyName: company.name,
+      title: 'Outreach variants generated',
+      detail: `${variants.length} variants prepared for ${outreachPersona}`
+    });
+  }, [appendActivityEvent, outreachPersona, outreachTone]);
 
   const generateEmailVariant = (company, persona, tone, signal, approach) => {
     const personaConfig = getPersonaConfig(persona);
-    const toneConfig = getToneConfig(tone);
 
-    const topSignal = signal || { type: 'general', details: 'cybersecurity readiness assessment' };
+    const topSignal = signal || { type: 'general', details: 'settlement workflow assessment' };
 
     // Generate subject lines based on approach
     const subjects = approach === 'direct'
       ? generateDirectSubjects(company, topSignal, personaConfig)
-      : generateConsultativeSubjects(company, topSignal, personaConfig);
+      : generateConsultativeSubjects(company);
 
     const subject = subjects[Math.floor(Math.random() * subjects.length)];
 
@@ -1288,29 +1428,36 @@ P.S. I noticed ${company.name} is using ${company.securityTools?.[0] || 'various
 
   const getPersonaConfig = (persona) => {
     const configs = {
-      CISO: {
-        title: 'CISO',
-        focus: 'technical security',
-        concerns: ['threat landscape', 'security architecture', 'compliance frameworks'],
-        language: ['risk mitigation', 'security posture', 'threat intelligence'],
-        priorities: ['Zero Trust', 'incident response', 'security automation']
-      },
-      COO: {
-        title: 'COO',
-        focus: 'operational efficiency',
-        concerns: ['business continuity', 'operational risk', 'process optimization'],
-        language: ['operational excellence', 'business resilience', 'process efficiency'],
-        priorities: ['business continuity', 'risk management', 'operational security']
-      },
       CFO: {
         title: 'CFO',
-        focus: 'budget and compliance',
-        concerns: ['cost optimization', 'regulatory compliance', 'ROI justification'],
-        language: ['cost-effective solutions', 'regulatory requirements', 'financial impact'],
-        priorities: ['cost reduction', 'compliance costs', 'budget optimization']
+        focus: 'capital efficiency and liquidity',
+        concerns: ['working capital drag', 'settlement risk', 'financial control discipline'],
+        language: ['liquidity impact', 'capital efficiency', 'control effectiveness'],
+        priorities: ['faster cash conversion', 'reduced exception cost', 'better control visibility']
+      },
+      'Head of Trade Finance': {
+        title: 'Head of Trade Finance',
+        focus: 'document flow and settlement timing',
+        concerns: ['document delays', 'counterparty friction', 'cycle-time bottlenecks'],
+        language: ['process friction', 'document exceptions', 'timing reliability'],
+        priorities: ['fewer delays', 'smoother handoffs', 'better counterparty coordination']
+      },
+      'Settlement Manager': {
+        title: 'Settlement Manager',
+        focus: 'reconciliation and exception handling',
+        concerns: ['manual workflows', 'break resolution', 'handoff errors'],
+        language: ['reconciliation effort', 'exception volume', 'operational throughput'],
+        priorities: ['fewer breaks', 'lower manual effort', 'cleaner daily operations']
+      },
+      'Operations Lead': {
+        title: 'Operations Lead',
+        focus: 'day-to-day operational efficiency',
+        concerns: ['tooling gaps', 'handoff friction', 'approval latency'],
+        language: ['operational friction', 'team capacity', 'workflow drag'],
+        priorities: ['better throughput', 'less rework', 'more predictable execution']
       }
     };
-    return configs[persona] || configs.CISO;
+    return configs[persona] || configs.CFO;
   };
 
   const getToneConfig = (tone) => {
@@ -1340,22 +1487,21 @@ P.S. I noticed ${company.name} is using ${company.securityTools?.[0] || 'various
   const generateDirectSubjects = (company, signal, personaConfig) => {
     const signalType = formatSignalType(signal.type);
     return [
-      `${company.name}: ${signalType} Security Priority`,
-      `Urgent: ${signalType} Risk at ${company.name}`,
-      `${company.name} ${signalType} - Immediate Action Required`,
+      `${company.name}: ${signalType} Priority`,
+      `Urgent: ${signalType} Pressure at ${company.name}`,
+      `${company.name} ${signalType} - Immediate Review`,
       `${personaConfig.title} Alert: ${signalType} at ${company.name}`,
-      `Time-Sensitive: ${company.name} Security Gap Identified`
+      `Time-Sensitive: ${company.name} Process Gap Identified`
     ];
   };
 
-  const generateConsultativeSubjects = (company, signal, personaConfig) => {
-    const signalType = formatSignalType(signal.type);
+  const generateConsultativeSubjects = (company) => {
     return [
-      `${company.name}: Industry Security Benchmarking`,
-      `${company.industry} Security Insights for ${company.name}`,
-      `Peer Analysis: How ${company.name} Compares in Security`,
-      `${company.name}: Strategic Security Planning Discussion`,
-      `${company.industry} Security Trends - ${company.name} Impact`
+      `${company.name}: Trade Operations Benchmarking`,
+      `${company.industry} Workflow Insights for ${company.name}`,
+      `Peer Analysis: How ${company.name} Compares Operationally`,
+      `${company.name}: Settlement Efficiency Discussion`,
+      `${company.industry} Timing Trends - ${company.name} Impact`
     ];
   };
 
@@ -1374,7 +1520,7 @@ P.S. I noticed ${company.name} is using ${company.securityTools?.[0] || 'various
     if (approach === 'direct') {
       opening = `I noticed ${company.name} has a ${signalType.toLowerCase()} situation that requires immediate ${personaConfig.focus} attention.`;
     } else {
-      opening = `I've been analyzing security trends in the ${company.industry.toLowerCase()} sector and noticed some patterns that might interest you.`;
+      opening = `I've been analyzing trade operations patterns in the ${company.industry.toLowerCase()} sector and noticed some themes that might interest you.`;
     }
 
     let context = '';
@@ -1384,11 +1530,13 @@ P.S. I noticed ${company.name} is using ${company.securityTools?.[0] || 'various
 
     let businessImpact = '';
     if (persona === 'CFO') {
-      businessImpact = `This could impact ${company.name}'s compliance costs and regulatory standing. `;
-    } else if (persona === 'COO') {
-      businessImpact = `This presents operational risks that could affect business continuity. `;
+      businessImpact = `This could affect ${company.name}'s liquidity efficiency, control cost, and working-capital performance. `;
+    } else if (persona === 'Head of Trade Finance') {
+      businessImpact = `This can slow document flow, delay settlement timing, and increase counterparty friction. `;
+    } else if (persona === 'Settlement Manager' || persona === 'Operations Lead') {
+      businessImpact = `This presents day-to-day operational friction that can increase rework, exceptions, and manual effort. `;
     } else {
-      businessImpact = `This poses significant security risks to ${company.name}'s infrastructure. `;
+      businessImpact = `This creates avoidable execution risk across trade operations. `;
     }
 
     let solution = '';
@@ -1408,21 +1556,21 @@ P.S. I noticed ${company.name} is using ${company.securityTools?.[0] || 'various
 
     let cta = '';
     if (tone === 'urgent') {
-      cta = `Given the time-sensitive nature of this issue, would you have 15 minutes this week to discuss ${company.name}'s immediate security priorities?`;
+      cta = `Given the time-sensitive nature of this issue, would you have 15 minutes this week to discuss ${company.name}'s immediate process priorities?`;
     } else if (tone === 'plain') {
-      cta = `Would a brief 15-minute call next week be helpful to discuss how other ${company.industry.toLowerCase()} companies are handling this?`;
+      cta = `Would a brief 15-minute call next week be helpful to discuss how other ${company.industry.toLowerCase()} teams are handling this?`;
     } else {
-      cta = `I would welcome the opportunity to share relevant insights in a brief 15-minute conversation at your convenience.`;
+      cta = `I would welcome the opportunity to share relevant operating insights in a brief 15-minute conversation at your convenience.`;
     }
 
     let closing = toneConfig.closing;
     let signature = `[Your Name]
-INP² Security Solutions
+Laminar Digital
 [Your Contact Information]`;
 
     let ps = '';
     if (company.techStack && company.techStack.length > 0) {
-      ps = `\n\nP.S. I noticed ${company.name} is using ${company.techStack[0]} - happy to discuss security best practices specific to your current stack.`;
+      ps = `\n\nP.S. I noticed ${company.name} is using ${company.techStack[0]} - happy to compare where similar teams see workflow drag in their current tooling mix.`;
     }
 
     return `${greeting},
@@ -1469,19 +1617,30 @@ ${signature}${ps}`;
         ? company.executives[0]
         : { email: 'contact@' + (company.domain || 'company.com'), name: 'Executive' };
 
+      const emailResult = await netlifyAPI.sendEmail(
+        executive.email,
+        variant.subject,
+        variant.body,
+        company.id,
+        variant.persona,
+        variant.tone
+      );
+      setLastEmailResult(emailResult);
+
       // Store outreach in company history
       const outreachRecord = {
         id: Date.now().toString(),
         timestamp: new Date().toISOString(),
         type: 'email',
-        status: 'sent',
+        status: emailResult?.meta?.source === 'simulated' ? 'simulated' : 'sent',
         subject: variant.subject,
         body: variant.body,
         persona: variant.persona,
         tone: variant.tone,
         approach: variant.approach,
         topSignal: variant.topSignal,
-        recipient: executive.email
+        recipient: executive.email,
+        sourceMeta: emailResult?.meta
       };
 
       // Update company with outreach history
@@ -1502,7 +1661,17 @@ ${signature}${ps}`;
         setSelectedCompany(updatedCompany);
       }
 
-      alert(`Outreach sent successfully to ${executive.email}`);
+      appendActivityEvent({
+        category: 'outreach',
+        companyId: company.id,
+        companyName: company.name,
+        title: emailResult?.meta?.source === 'simulated' ? 'Outreach simulated' : 'Outreach sent',
+        detail: `${variant.persona} / ${variant.tone} -> ${executive.email}`
+      });
+
+      alert(emailResult?.meta?.source === 'simulated'
+        ? `Outreach simulated for ${executive.email}`
+        : `Outreach sent successfully to ${executive.email}`);
 
     } catch (error) {
       console.error('Failed to send outreach:', error);
@@ -1528,10 +1697,14 @@ ${signature}${ps}`;
       createdAt: new Date().toISOString()
     };
 
-    // Save to localStorage
-    const existingTemplates = JSON.parse(localStorage.getItem('outreach-templates') || '[]');
-    existingTemplates.push(template);
-    localStorage.setItem('outreach-templates', JSON.stringify(existingTemplates));
+    setSavedOutreachTemplates(prev => [template, ...prev].slice(0, 50));
+    appendActivityEvent({
+      category: 'outreach',
+      companyId: company.id,
+      companyName: company.name,
+      title: 'Outreach template saved',
+      detail: template.name
+    });
 
     alert(`Template saved: ${template.name}`);
   };
@@ -1560,9 +1733,9 @@ ${signature}${ps}`;
       .slice(0, 3);
 
     // Ensure we have signals for each touch
-    const touch1Signal = topSignals[0] || { type: 'general', details: 'cybersecurity assessment' };
-    const touch2Signal = topSignals[1] || { type: 'compliance', details: 'security framework review' };
-    const touch3Signal = topSignals[2] || { type: 'optimization', details: 'security stack optimization' };
+    const touch1Signal = topSignals[0] || { type: 'general', details: 'settlement workflow assessment' };
+    const touch2Signal = topSignals[1] || { type: 'compliance', details: 'operating control review' };
+    const touch3Signal = topSignals[2] || { type: 'optimization', details: 'reconciliation and approval optimization' };
 
     const newSequence = {
       id: sequenceId,
@@ -1630,9 +1803,13 @@ ${signature}${ps}`;
       setSelectedCompany(updatedCompany);
     }
 
-    // Save to localStorage
-    const updatedSequences = [...sequences, newSequence];
-    localStorage.setItem('lead-sequences', JSON.stringify(updatedSequences));
+    appendActivityEvent({
+      category: 'sequence',
+      companyId: company.id,
+      companyName: company.name,
+      title: '3-touch sequence created',
+      detail: `${initialVariant.persona} / ${initialVariant.tone}`
+    });
 
     setShowSequenceModal(false);
     alert(`3-touch sequence created for ${company.name}`);
@@ -1644,7 +1821,7 @@ ${signature}${ps}`;
 
     const messages = [
       `Hi! I noticed ${company.name} might be dealing with ${signalType.toLowerCase()}. As a ${personaConfig.title}, this probably impacts your ${personaConfig.focus}. Worth a quick chat?`,
-      `Following up on security trends in ${company.industry}. Seeing ${signalType.toLowerCase()} as a priority for ${personaConfig.title}s. Would love your perspective.`,
+      `Following up on finance-operations trends in ${company.industry}. Seeing ${signalType.toLowerCase()} as a priority for ${personaConfig.title}s. Would value your perspective.`,
       `Quick question about ${company.name}'s approach to ${signalType.toLowerCase()}. Helping similar ${company.industry.toLowerCase()} companies with this challenge.`
     ];
 
@@ -1678,48 +1855,45 @@ INP² Security Solutions`;
   };
 
   const markTouchComplete = (sequenceId, touchId) => {
+    const completedAt = new Date().toISOString();
+    let touchedSequence = null;
+    let touchedTouch = null;
+
     setSequences(prev => prev.map(seq => {
       if (seq.id !== sequenceId) return seq;
 
+      touchedSequence = seq;
       return {
         ...seq,
         touches: seq.touches.map(touch => {
           if (touch.id !== touchId) return touch;
-
+          touchedTouch = touch;
           return {
             ...touch,
             completed: true,
-            completedAt: new Date().toISOString(),
+            completedAt,
             status: 'completed'
           };
         })
       };
     }));
 
-    // Save to localStorage
-    const updatedSequences = sequences.map(seq => {
-      if (seq.id !== sequenceId) return seq;
-      return {
-        ...seq,
-        touches: seq.touches.map(touch => {
-          if (touch.id !== touchId) return touch;
-          return {
-            ...touch,
-            completed: true,
-            completedAt: new Date().toISOString(),
-            status: 'completed'
-          };
-        })
-      };
-    });
-    localStorage.setItem('lead-sequences', JSON.stringify(updatedSequences));
+    if (touchedSequence && touchedTouch) {
+      appendActivityEvent({
+        category: 'sequence',
+        companyId: touchedSequence.companyId,
+        companyName: touchedSequence.companyName,
+        title: 'Sequence touch completed',
+        detail: touchedTouch.title
+      });
+    }
   };
 
   const cancelSequence = (sequenceId) => {
+    const sequence = sequences.find(seq => seq.id === sequenceId);
     setSequences(prev => prev.filter(seq => seq.id !== sequenceId));
 
     // Remove sequence from company
-    const sequence = sequences.find(seq => seq.id === sequenceId);
     if (sequence) {
       setCompanies(prev => prev.map(c => {
         if (c.id === sequence.companyId) {
@@ -1728,11 +1902,14 @@ INP² Security Solutions`;
         }
         return c;
       }));
+      appendActivityEvent({
+        category: 'sequence',
+        companyId: sequence.companyId,
+        companyName: sequence.companyName,
+        title: 'Sequence cancelled',
+        detail: sequence.persona
+      });
     }
-
-    // Update localStorage
-    const updatedSequences = sequences.filter(seq => seq.id !== sequenceId);
-    localStorage.setItem('lead-sequences', JSON.stringify(updatedSequences));
 
     alert('Sequence cancelled');
   };
@@ -1760,24 +1937,12 @@ INP² Security Solutions`;
     return dueTouches.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
   };
 
-  // Load sequences from localStorage on component mount
-  useEffect(() => {
-    const savedSequences = localStorage.getItem('lead-sequences');
-    if (savedSequences) {
-      try {
-        setSequences(JSON.parse(savedSequences));
-      } catch (error) {
-        console.error('Failed to load sequences:', error);
-      }
-    }
-  }, []);
-
   async function generateRealLeads(source = 'apollo') {
     const setFlag = source === 'news' ? setLoadingNews : setLoadingApollo;
     setFlag(true);
     try {
       const criteria = {
-        industry: filterIndustry !== 'all' ? filterIndustry : 'Software',
+        industry: filterIndustry !== 'all' ? filterIndustry : 'Finance',
         minEmployees: 50,
         maxEmployees: 1000,
       };
@@ -1787,10 +1952,16 @@ INP² Security Solutions`;
         : await netlifyAPI.fetchLeads(criteria);
 
       if (result?.success && Array.isArray(result.leads)) {
-        setCompanies(result.leads);
-        if (result.leads.length) setSelectedCompany(result.leads[0]);
+        const leads = result.leads.map((lead) => decorateLeadWithMeta(lead, result.meta));
+        setCompanies(leads);
+        if (leads.length) setSelectedCompany(leads[0]);
         setApiConnected(true);
-        console.log(`✅ fetched ${result.leads.length} leads from ${result.source || source}`);
+        appendActivityEvent({
+          category: 'lead_refresh',
+          title: `${source === 'news' ? 'News' : 'Apollo'} leads refreshed`,
+          detail: `${leads.length} leads from ${result.meta?.provider || result.source || source}`
+        });
+        console.log(`✅ fetched ${leads.length} leads from ${result.source || source}`);
       } else {
         throw new Error('No leads returned from API');
       }
@@ -1802,7 +1973,6 @@ INP² Security Solutions`;
     }
   }
 
-  // Mock data on first load
   useEffect(() => {
     const generateMockLeads = () => {
       const industries = ['Software', 'Healthcare', 'Finance', 'Manufacturing', 'Retail', 'Education', 'Government', 'Energy', 'Real Estate', 'Legal', 'Technology'];
@@ -1870,10 +2040,11 @@ INP² Security Solutions`;
           executives: [
             {
               name: `${['John', 'Sarah', 'Mike', 'Lisa', 'David', 'Jennifer', 'Robert', 'Emily'][Math.floor(Math.random() * 8)]} ${['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis'][Math.floor(Math.random() * 8)]}`,
-              title: ['CISO', 'CTO', 'IT Director', 'Security Manager', 'VP of Technology'][Math.floor(Math.random() * 5)],
+              title: ['CFO', 'Head of Trade Finance', 'Settlement Manager', 'Treasurer', 'Operations Lead'][Math.floor(Math.random() * 5)],
               email: `contact@${(companyNames[i] || `company${i + 1}`).toLowerCase().replace(/\s+/g, '')}.com`,
             },
           ],
+          contacts: [],
           news: [
             {
               date: `2024-07-${Math.floor(Math.random() * 30) + 1}`,
@@ -1899,15 +2070,120 @@ INP² Security Solutions`;
             lastRound: `Series ${['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)]} - ${Math.floor(Math.random() * 50) + 2}M`,
             investors: ['Accel Partners', 'Sequoia Capital', 'Andreessen Horowitz', 'Kleiner Perkins'][Math.floor(Math.random() * 4)],
           },
+          sourceMeta: {
+            source: 'mock',
+            provider: 'local_demo',
+            live: false,
+            fallbackUsed: true,
+            reason: 'Local demo dataset loaded on first render.'
+          }
         });
       }
-      return mockLeads;
+      return mockLeads.map((lead) => {
+        const contacts = qualifyTradeFinanceContacts(lead.executives, lead.sourceMeta, lead.name);
+        return decorateLeadWithMeta({
+          ...lead,
+          contacts,
+          executives: contacts
+        }, lead.sourceMeta);
+      });
     };
 
-    const mockData = generateMockLeads();
-    setCompanies(mockData);
-    if (mockData.length) setSelectedCompany(mockData[0]);
+    const hydrateState = async () => {
+      try {
+        const [leadState, segmentState, sequenceState, outreachState, health] = await Promise.all([
+          loadLeadState(),
+          loadSegmentState(),
+          loadSequenceState(),
+          loadOutreachState(),
+          netlifyAPI.getIntegrationHealth().catch(() => null)
+        ]);
+
+        const storedCompanies = Array.isArray(leadState?.companies) ? leadState.companies.map((company) =>
+          decorateLeadWithMeta(company, company.sourceMeta || {})
+        ) : [];
+        const companiesToUse = storedCompanies.length ? storedCompanies : generateMockLeads();
+        const selectedFromState = leadState?.selectedCompanyId
+          ? companiesToUse.find((company) => company.id === leadState.selectedCompanyId) || companiesToUse[0]
+          : companiesToUse[0];
+
+        setCompanies(companiesToUse);
+        setSelectedCompany(selectedFromState || null);
+        setSavedSegments(segmentState?.savedSegments || []);
+        setActiveSegment(segmentState?.activeSegment || null);
+        setSequences(sequenceState?.sequences || []);
+        setSavedOutreachTemplates(outreachState?.templates || []);
+        setVariantsByCompany(outreachState?.variantsByCompany || {});
+        setActivityTimeline(leadState?.activityTimeline || []);
+        setLastEmailResult(leadState?.lastEmailResult || null);
+        setIntegrationHealth(health?.providers || []);
+        setApiConnected(storedCompanies.length > 0);
+      } catch (error) {
+        console.error('Failed to hydrate persisted state:', error);
+        const mockData = generateMockLeads();
+        setCompanies(mockData);
+        setSelectedCompany(mockData[0] || null);
+      } finally {
+        setStorageHydrated(true);
+      }
+    };
+
+    hydrateState();
   }, []);
+
+  useEffect(() => {
+    if (!storageHydrated) {
+      return;
+    }
+
+    saveLeadState({
+      companies,
+      selectedCompanyId: selectedCompany?.id || null,
+      activityTimeline,
+      lastEmailResult
+    }).catch((error) => {
+      console.error('Failed to persist lead state:', error);
+    });
+  }, [companies, selectedCompany, activityTimeline, lastEmailResult, storageHydrated]);
+
+  useEffect(() => {
+    if (!storageHydrated) {
+      return;
+    }
+
+    saveSegmentState({
+      savedSegments,
+      activeSegment
+    }).catch((error) => {
+      console.error('Failed to persist segment state:', error);
+    });
+  }, [savedSegments, activeSegment, storageHydrated]);
+
+  useEffect(() => {
+    if (!storageHydrated) {
+      return;
+    }
+
+    saveSequenceState({
+      sequences
+    }).catch((error) => {
+      console.error('Failed to persist sequence state:', error);
+    });
+  }, [sequences, storageHydrated]);
+
+  useEffect(() => {
+    if (!storageHydrated) {
+      return;
+    }
+
+    saveOutreachState({
+      templates: savedOutreachTemplates,
+      variantsByCompany,
+      history: flattenOutreachHistory(companies)
+    }).catch((error) => {
+      console.error('Failed to persist outreach state:', error);
+    });
+  }, [savedOutreachTemplates, variantsByCompany, companies, storageHydrated]);
 
   const getScoreColor = (score) => {
     if (score >= 80) return 'bg-green-500';
@@ -1938,6 +2214,22 @@ INP² Security Solutions`;
   const availableStates = useMemo(() => getUniqueStates(companies), [companies]);
   const availableIndustries = useMemo(() => getUniqueIndustries(companies), [companies]);
 
+  useEffect(() => {
+    if (!selectedCompany?.id) {
+      return;
+    }
+
+    const storedVariants = variantsByCompany[selectedCompany.id];
+    if (Array.isArray(storedVariants) && storedVariants.length > 0) {
+      setOutreachVariants(storedVariants);
+      setSelectedVariant((current) => Math.min(current, storedVariants.length - 1));
+      return;
+    }
+
+    setOutreachVariants([]);
+    setSelectedVariant(0);
+  }, [selectedCompany?.id, variantsByCompany]);
+
   return (
     <div className="p-6 space-y-6 bg-gray-50 min-h-screen">
       <div className="flex justify-between items-center">
@@ -1952,7 +2244,7 @@ INP² Security Solutions`;
             }}
           />
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Cybersecurity Lead Generation Dashboard</h1>
+            <h1 className="text-3xl font-bold text-gray-900">INP² Trade Finance Lead Dashboard</h1>
             <p className="text-sm text-gray-600">INP² Security Solutions</p>
           </div>
         </div>
@@ -2020,6 +2312,77 @@ INP² Security Solutions`;
           </Button>
         </div>
       </div>
+
+      <Card className="border-slate-200 bg-white">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <CardTitle className="text-lg">Integration Health</CardTitle>
+              <p className="text-sm text-gray-600">Clear status for live providers, fallbacks, and storage backends.</p>
+            </div>
+            <Button variant="outline" size="sm" onClick={refreshIntegrationHealth} disabled={healthLoading}>
+              {healthLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Refresh'}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
+            {integrationHealth.map((provider) => (
+              <div key={provider.name} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-medium text-slate-900">{provider.name}</p>
+                  <Badge
+                    variant="outline"
+                    className={
+                      provider.mode === 'live'
+                        ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                        : provider.mode === 'fallback' || provider.mode === 'simulated'
+                          ? 'border-amber-300 bg-amber-50 text-amber-700'
+                          : 'border-slate-300 bg-slate-100 text-slate-700'
+                    }
+                  >
+                    {provider.mode}
+                  </Badge>
+                </div>
+                <p className="mt-2 text-xs text-gray-600">
+                  {provider.configured ? 'Configured' : 'Not configured'} • {provider.live ? 'Live ready' : 'Fallback or mock only'}
+                </p>
+              </div>
+            ))}
+            {integrationHealth.length === 0 && (
+              <div className="col-span-full rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                Integration status is unavailable right now. The dashboard will continue using labeled fallbacks where configured.
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-slate-200 bg-white">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg">Recent Activity</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {activityTimeline.slice(0, 6).map((event) => (
+              <div key={event.id} className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <div>
+                  <p className="text-sm font-medium text-slate-900">{event.title}</p>
+                  <p className="text-xs text-gray-600">
+                    {[event.companyName, event.detail].filter(Boolean).join(' • ')}
+                  </p>
+                </div>
+                <span className="text-xs text-gray-500">
+                  {new Date(event.timestamp).toLocaleDateString()}
+                </span>
+              </div>
+            ))}
+            {activityTimeline.length === 0 && (
+              <p className="text-sm text-gray-600">No persisted activity yet. Lead refreshes, outreach, meetings, and sequences will appear here.</p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {showLeadGen && (
         <Card className="border-green-200 bg-green-50">
@@ -2323,13 +2686,18 @@ INP² Security Solutions`;
                             <div key={i} className="p-2 bg-gray-50 border rounded">
                               <div className="flex items-center justify-between">
                                 <div className="text-sm font-medium">{p.name || 'Unknown'}</div>
-                                <Badge variant={p.score >= 80 ? 'default' : 'secondary'}>
-                                  {p.score} ({p.priority})
+                                <Badge variant={(p.relevanceScore || p.score) >= 80 ? 'default' : 'secondary'}>
+                                  {p.relevanceScore || p.score || 0} ({p.priority || p.roleCategory || 'Unranked'})
                                 </Badge>
                               </div>
                               <div className="text-xs text-gray-600">
                                 {p.title} {p.company ? `· ${p.company}` : ''}
                               </div>
+                              {(p.roleCategory || p.priorityRank) && (
+                                <div className="text-xs text-gray-500">
+                                  {[p.roleCategory ? `Role: ${p.roleCategory.replace('_', ' ')}` : null, p.priorityRank ? `Rank: ${p.priorityRank}` : null].filter(Boolean).join(' · ')}
+                                </div>
+                              )}
                               {p.email && <div className="text-xs text-blue-700 truncate">{p.email}</div>}
                               {p.scoreReasons?.length > 0 && (
                                 <ul className="text-xs text-gray-500 list-disc ml-4 mt-1">
@@ -2393,19 +2761,24 @@ INP² Security Solutions`;
                       <div className="mt-2 p-2 bg-gray-50 border rounded">
                         <div className="flex items-center justify-between">
                           <div className="text-sm font-medium">{apolloEnrichResult.person.name}</div>
-                          <Badge variant={apolloEnrichResult.person.score >= 80 ? 'default' : 'secondary'}>
-                            {apolloEnrichResult.person.score} ({apolloEnrichResult.person.priority})
+                          <Badge variant={(apolloEnrichResult.person.relevanceScore || apolloEnrichResult.person.score) >= 80 ? 'default' : 'secondary'}>
+                            {apolloEnrichResult.person.relevanceScore || apolloEnrichResult.person.score || 0} ({apolloEnrichResult.person.priority || apolloEnrichResult.person.roleCategory || 'Unranked'})
                           </Badge>
                         </div>
                         <div className="text-xs text-gray-600">
                           {apolloEnrichResult.person.title} {apolloEnrichResult.person.company ? `· ${apolloEnrichResult.person.company}` : ''}
                         </div>
+                        {(apolloEnrichResult.person.roleCategory || apolloEnrichResult.person.priorityRank) && (
+                          <div className="text-xs text-gray-500">
+                            {[apolloEnrichResult.person.roleCategory ? `Role: ${apolloEnrichResult.person.roleCategory.replace('_', ' ')}` : null, apolloEnrichResult.person.priorityRank ? `Rank: ${apolloEnrichResult.person.priorityRank}` : null].filter(Boolean).join(' · ')}
+                          </div>
+                        )}
                         {apolloEnrichResult.person.email && (
                           <div className="text-xs text-blue-700">{apolloEnrichResult.person.email}</div>
                         )}
-                        {apolloEnrichResult.person.linkedin && (
+                        {(apolloEnrichResult.person.linkedin || apolloEnrichResult.person.linkedin_url) && (
                           <a
-                            href={apolloEnrichResult.person.linkedin}
+                            href={apolloEnrichResult.person.linkedin || apolloEnrichResult.person.linkedin_url}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-xs text-blue-600 underline"
@@ -2425,7 +2798,7 @@ INP² Security Solutions`;
               <h4 className="font-medium text-blue-800 mb-2">💡 Pro Tips for Lead Generation:</h4>
               <ul className="text-sm text-blue-700 space-y-1">
                 <li>• <strong>Timing is everything:</strong> Target companies 30-90 days after funding rounds</li>
-                <li>• <strong>Job posting intelligence:</strong> Companies hiring CISOs/Security Engineers are actively investing</li>
+                <li>• <strong>Job posting intelligence:</strong> Companies hiring treasury, settlement, or trade finance roles are actively investing</li>
                 <li>• <strong>Technology triggers:</strong> Companies migrating to cloud often need new security solutions</li>
                 <li>• <strong>Compliance deadlines:</strong> Track upcoming regulatory requirements (SOX, GDPR, etc.)</li>
                 <li>• <strong>Industry events:</strong> Follow RSA, Black Hat attendee lists for active prospects</li>
@@ -2739,9 +3112,14 @@ INP² Security Solutions`;
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-xs font-medium">{company.leadScore}/100</span>
-                        <Badge className={getPriorityColor(company.priority)} variant="outline">
-                          {company.priority}
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className={`text-[10px] ${getSourceBadge(company.sourceMeta).className}`}>
+                            {getSourceBadge(company.sourceMeta).label}
+                          </Badge>
+                          <Badge className={getPriorityColor(company.priority)} variant="outline">
+                            {company.priority}
+                          </Badge>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -2769,13 +3147,18 @@ INP² Security Solutions`;
                 className={`cursor-pointer transition-all hover:shadow-md ${selectedCompany?.id === company.id ? 'ring-2 ring-blue-500' : ''}`}
                 onClick={() => setSelectedCompany(company)}
               >
-                <CardContent className="p-4">
-                  <div className="flex justify-between items-start mb-2">
-                    <h4 className="font-semibold text-sm">{company.name}</h4>
-                    <Badge className={getPriorityColor(company.priority)}>
-                      {company.priority}
-                    </Badge>
-                  </div>
+                  <CardContent className="p-4">
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <h4 className="font-semibold text-sm">{company.name}</h4>
+                        <Badge variant="outline" className={`mt-2 text-[10px] ${getSourceBadge(company.sourceMeta).className}`}>
+                          {getSourceBadge(company.sourceMeta).label}
+                        </Badge>
+                      </div>
+                      <Badge className={getPriorityColor(company.priority)}>
+                        {company.priority}
+                      </Badge>
+                    </div>
                   <p className="text-xs text-gray-600 mb-2">
                     {company.industry} • {company.employees} employees
                   </p>
@@ -2802,6 +3185,14 @@ INP² Security Solutions`;
                       <div>
                         <h2 className="text-2xl font-bold">{selectedCompany.name}</h2>
                         <p className="text-gray-600">{selectedCompany.industry} • {selectedCompany.location}</p>
+                        <div className="mt-2 flex items-center gap-2">
+                          <Badge variant="outline" className={getSourceBadge(selectedCompany.sourceMeta).className}>
+                            {getSourceBadge(selectedCompany.sourceMeta).label}
+                          </Badge>
+                          {selectedCompany.sourceMeta?.provider && (
+                            <span className="text-xs text-gray-500">{selectedCompany.sourceMeta.provider}</span>
+                          )}
+                        </div>
                       </div>
                       <div className="text-right relative">
                         <div className="flex items-center gap-2">
@@ -2820,6 +3211,12 @@ INP² Security Solutions`;
                         {showScoreExplanation && renderScoreExplanation(selectedCompany)}
                       </div>
                     </div>
+
+                    {getSourceWarning(selectedCompany.sourceMeta) && (
+                      <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                        {getSourceWarning(selectedCompany.sourceMeta)}
+                      </div>
+                    )}
 
                     <div className="grid grid-cols-4 gap-4 mb-4">
                       <div className="flex items-center gap-2">
@@ -2846,7 +3243,7 @@ INP² Security Solutions`;
                         onClick={() => openEmailModal(selectedCompany)}
                       >
                         <Mail className="w-4 h-4 mr-2" />
-                        Send Email
+                        {lastEmailResult?.meta?.source === 'simulated' ? 'Simulate Send' : 'Send Email'}
                       </Button>
                       <Button
                         size="sm"
@@ -3150,26 +3547,45 @@ INP² Security Solutions`;
                   <TabsContent value="contacts" className="space-y-4">
                     <Card>
                       <CardHeader>
-                        <CardTitle>Key Executives</CardTitle>
+                        <CardTitle>Key Contacts</CardTitle>
                       </CardHeader>
                       <CardContent>
-                        <div className="space-y-4">
-                          {selectedCompany.executives.map((exec, i) => (
-                            <div key={i} className="flex justify-between items-center p-3 border rounded-lg">
-                              <div>
-                                <h4 className="font-semibold">{exec.name}</h4>
-                                <p className="text-sm text-gray-600">{exec.title}</p>
-                                <p className="text-sm text-blue-600">{exec.email}</p>
+                        <div className="space-y-6">
+                          {groupContactsByRole(selectedCompany).map((group) => (
+                            group.contacts.length > 0 ? (
+                              <div key={group.key}>
+                                <h4 className="mb-3 text-sm font-semibold text-gray-700">{group.label}</h4>
+                                <div className="space-y-4">
+                                  {group.contacts.map((exec, i) => (
+                                    <div key={`${group.key}-${i}`} className="flex justify-between items-center p-3 border rounded-lg">
+                                      <div>
+                                        <div className="flex items-center gap-2">
+                                          <h4 className="font-semibold">{exec.name}</h4>
+                                          <Badge variant="outline">
+                                            {getRoleCategoryLabel(exec.roleCategory)}
+                                          </Badge>
+                                        </div>
+                                        <p className="text-sm text-gray-600">{exec.title}</p>
+                                        <p className="text-sm text-blue-600">{exec.email || 'No verified email'}</p>
+                                        <p className="text-xs text-gray-500">
+                                          Relevance {exec.relevanceScore || 0}
+                                          {exec.department ? ` • ${exec.department}` : ''}
+                                          {exec.seniority ? ` • ${exec.seniority}` : ''}
+                                        </p>
+                                      </div>
+                                      <div className="flex gap-2">
+                                        <Button size="sm" variant="outline">
+                                          <Mail className="w-4 h-4" />
+                                        </Button>
+                                        <Button size="sm" variant="outline">
+                                          <Globe className="w-4 h-4" />
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
-                              <div className="flex gap-2">
-                                <Button size="sm" variant="outline">
-                                  <Mail className="w-4 h-4" />
-                                </Button>
-                                <Button size="sm" variant="outline">
-                                  <Globe className="w-4 h-4" />
-                                </Button>
-                              </div>
-                            </div>
+                            ) : null
                           ))}
                         </div>
                       </CardContent>
@@ -3225,6 +3641,11 @@ INP² Security Solutions`;
                         <p className="text-sm text-gray-600">Generate personalized outreach with AI-powered personas and A/B variants</p>
                       </CardHeader>
                       <CardContent className="space-y-6">
+                        {getSourceWarning(selectedCompany.sourceMeta) && (
+                          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                            {getSourceWarning(selectedCompany.sourceMeta)}
+                          </div>
+                        )}
                         {/* Persona and Tone Selection */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div>
@@ -3234,9 +3655,10 @@ INP² Security Solutions`;
                               value={outreachPersona}
                               onChange={(e) => setOutreachPersona(e.target.value)}
                             >
-                              <option value="CISO">CISO (Technical Security)</option>
-                              <option value="COO">COO (Operations & Risk)</option>
-                              <option value="CFO">CFO (Budget & Compliance)</option>
+                              <option value="CFO">CFO (Liquidity & Capital)</option>
+                              <option value="Head of Trade Finance">Head of Trade Finance</option>
+                              <option value="Settlement Manager">Settlement Manager</option>
+                              <option value="Operations Lead">Operations Lead</option>
                             </select>
                           </div>
                           <div>
@@ -3316,7 +3738,7 @@ INP² Security Solutions`;
                               className="bg-green-600 hover:bg-green-700"
                             >
                               <Mail className="w-4 h-4 mr-2" />
-                              Send Selected Variant
+                              {lastEmailResult?.meta?.source === 'simulated' ? 'Simulate Selected Variant' : 'Send Selected Variant'}
                             </Button>
                             <Button
                               variant="outline"
@@ -3497,7 +3919,7 @@ INP² Security Solutions`;
                               <ul className="text-sm text-blue-700 space-y-1 ml-4">
                                 <li>• Collect and enrich company leads with security-relevant signals</li>
                                 <li>• Prioritize prospects transparently with AI-powered scoring</li>
-                                <li>• Generate contextual outreach targeted to executive buyers (CISO/CTO/COO/CFO)</li>
+                                <li>• Generate contextual outreach targeted to executive buyers (CFO, Treasury, Trade Finance, Operations)</li>
                                 <li>• Track engagement and automate follow-up sequences</li>
                               </ul>
                             </div>
@@ -3564,13 +3986,13 @@ INP² Security Solutions`;
                               <strong>Purpose:</strong> Access verified executive contacts with direct email addresses and phone numbers.
                             </p>
                             <div className="space-y-2 text-sm">
-                              <div><strong>Executive Contacts:</strong> CISO, CTO, COO, CFO with verified business emails</div>
+                              <div><strong>Executive Contacts:</strong> CFO, Treasurer, Head of Trade Finance, Settlement Manager with verified business emails</div>
                               <div><strong>Contact Information:</strong> Direct phone numbers, LinkedIn profiles, email addresses</div>
                               <div><strong>Role Context:</strong> Each contact shows their specific cybersecurity responsibilities</div>
                               <div><strong>Best Contact Time:</strong> Suggested optimal outreach timing based on role and company size</div>
                             </div>
                             <div className="bg-green-50 p-3 rounded mt-3 border border-green-200">
-                              <p className="text-xs text-green-800"><strong>✅ Best Practice:</strong> Start with CISO for technical discussions, COO for operational risk, CFO for budget/compliance conversations.</p>
+                              <p className="text-xs text-green-800"><strong>✅ Best Practice:</strong> Start with Head of Trade Finance for workflow friction, Settlement Manager for daily execution, and CFO for capital impact.</p>
                             </div>
                           </div>
 
@@ -3601,7 +4023,7 @@ INP² Security Solutions`;
                             <div className="space-y-2 text-sm">
                               <div><strong>Breach Proximity:</strong> Recent security incidents affecting their vendors or industry</div>
                               <div><strong>Regulatory Countdown:</strong> Upcoming compliance deadlines (SOC 2, GDPR, etc.)</div>
-                              <div><strong>Executive Changes:</strong> New CISO/CTO hires indicating security program changes</div>
+                              <div><strong>Executive Changes:</strong> New finance, treasury, or settlement leaders indicating process and control changes</div>
                               <div><strong>Insurance Renewal:</strong> Cyber insurance renewal windows requiring security improvements</div>
                               <div><strong>Attack Surface:</strong> Detected security configuration regressions</div>
                               <div><strong>AI Governance Gaps:</strong> Companies using AI without proper security governance</div>
@@ -3622,9 +4044,9 @@ INP² Security Solutions`;
                               <div>
                                 <h5 className="font-semibold text-gray-700 mb-2">🎭 Persona Selection</h5>
                                 <div className="space-y-1 text-sm">
-                                  <div><strong>CISO:</strong> Technical security focus, mentions specific tools and frameworks</div>
-                                  <div><strong>COO:</strong> Operational risk and business continuity emphasis</div>
-                                  <div><strong>CFO:</strong> Budget impact, compliance costs, ROI-focused messaging</div>
+                                  <div><strong>Head of Trade Finance:</strong> Process friction focus, mentions document flow and timing reliability</div>
+                                  <div><strong>Settlement Manager:</strong> Reconciliation, exceptions, and workflow emphasis</div>
+                                  <div><strong>CFO:</strong> Liquidity impact, capital efficiency, and control-cost messaging</div>
                                 </div>
                               </div>
 
@@ -3793,10 +4215,10 @@ INP² Security Solutions`;
                             <h5 className="font-semibold text-yellow-800 mb-2">🏆 Advanced Strategies</h5>
                             <ul className="text-sm text-yellow-700 space-y-1">
                               <li>• <strong>Signal Stacking:</strong> When a company has multiple high-scoring signals, mention 2-3 in your email</li>
-                              <li>• <strong>Persona Rotation:</strong> If CISO doesn't respond, try COO with operational risk angle</li>
+                              <li>• <strong>Persona Rotation:</strong> If the CFO doesn’t respond, try Head of Trade Finance or Settlement Manager with a workflow angle</li>
                               <li>• <strong>News Tie-ins:</strong> Always connect cybersecurity needs to their recent business news</li>
                               <li>• <strong>Compliance Urgency:</strong> Use regulatory countdown signals for CFO outreach</li>
-                              <li>• <strong>Vendor Risk:</strong> Reference breach proximity signals when targeting CISOs</li>
+                              <li>• <strong>Operational Proof:</strong> Reference RFP, workforce stress, and settlement-timing signals when targeting operators</li>
                             </ul>
                           </div>
                         </CardContent>
@@ -3964,6 +4386,17 @@ INP² Security Solutions`;
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
+              {lastEmailResult?.meta && (
+                <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                  <div>
+                    Last outreach action
+                    <span className="ml-2 text-xs text-gray-500">{lastEmailResult.provider}</span>
+                  </div>
+                  <Badge variant="outline" className={getSourceBadge(lastEmailResult.meta).className}>
+                    {getSourceBadge(lastEmailResult.meta).label}
+                  </Badge>
+                </div>
+              )}
               {/* Persona and Tone Selection */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -3980,10 +4413,10 @@ INP² Security Solutions`;
                       }));
                     }}
                   >
-                    <option value="CISO">CISO (Security Focus)</option>
-                    <option value="CTO">CTO (Technology Focus)</option>
-                    <option value="COO">COO (Operations Focus)</option>
-                    <option value="CFO">CFO (Cost Focus)</option>
+                    <option value="CFO">CFO (Liquidity & Capital)</option>
+                    <option value="Head of Trade Finance">Head of Trade Finance</option>
+                    <option value="Settlement Manager">Settlement Manager</option>
+                    <option value="Operations Lead">Operations Lead</option>
                   </select>
                 </div>
 
@@ -4060,7 +4493,7 @@ INP² Security Solutions`;
                   ) : (
                     <>
                       <Mail className="w-4 h-4 mr-2" />
-                      Send Email
+                      {lastEmailResult?.meta?.source === 'simulated' ? 'Simulate Send' : 'Send Email'}
                     </>
                   )}
                 </Button>

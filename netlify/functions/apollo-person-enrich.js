@@ -2,6 +2,7 @@ import { jsonResponse, errorResponse, fetchWithRetry } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
 import { scorePerson, SCORING_PROFILES } from '../lib/normalize.js';
+import { normalizeTradeFinanceContact } from '../lib/tradeFinanceContacts.js';
 
 const APOLLO_BASE_URL = 'https://api.apollo.io/api/v1';
 
@@ -129,6 +130,21 @@ async function enrichApolloPerson(apiKey, input, profile) {
     throw new Error('No person matched from Apollo enrichment');
   }
 
+  if (profile === 'commodity_trading') {
+    const companyName = matched.organization?.name || matched.company || input.organizationName || null;
+    const contact = normalizeTradeFinanceContact(
+      matched,
+      { source: 'apollo_live', provider: 'apollo_person_enrich' },
+      companyName
+    );
+
+    return {
+      ...contact,
+      score: contact.relevanceScore,
+      priority: contact.roleCategory === 'decision_maker' ? 'Critical' : contact.roleCategory === 'operator' ? 'High' : contact.roleCategory === 'influencer' ? 'Medium' : 'Low'
+    };
+  }
+
   return scorePerson(matched, profile);
 }
 
@@ -151,6 +167,20 @@ function generateMockEnrichment(input, profile) {
       industry: isCommodity ? 'Oil & Gas Trading' : 'Software'
     }
   };
+
+  if (profile === 'commodity_trading') {
+    const contact = normalizeTradeFinanceContact(
+      rawPerson,
+      { source: 'mock', provider: 'apollo_person_enrich' },
+      rawPerson.organization.name
+    );
+
+    return {
+      ...contact,
+      score: contact.relevanceScore,
+      priority: contact.roleCategory === 'decision_maker' ? 'Critical' : contact.roleCategory === 'operator' ? 'High' : contact.roleCategory === 'influencer' ? 'Medium' : 'Low'
+    };
+  }
 
   return scorePerson(rawPerson, profile);
 }

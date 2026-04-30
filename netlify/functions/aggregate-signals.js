@@ -1,11 +1,8 @@
 import OpenAI from 'openai';
-import { jsonResponse, errorResponse } from '../lib/http.js';
+import { jsonResponse, errorResponse, successResponse } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import { requireLiveDataEnabled } from '../lib/source.js';
 
 export async function handler(event) {
   if (event.httpMethod === 'OPTIONS') {
@@ -41,27 +38,56 @@ export async function handler(event) {
     const aiKey = process.env.OPENAI_API_KEY;
     if (!aiKey) {
       console.warn('OpenAI API key missing, using rule-based analysis');
+      if (requireLiveDataEnabled()) {
+        return errorResponse('Live AI analysis is required but OpenAI is not configured.', 503, {
+          source: 'provider_fallback',
+          provider: 'openai',
+          reason: 'REQUIRE_LIVE_DATA blocked rule-based fallback analysis.'
+        });
+      }
+
       const mockAnalysis = generateMockAnalysis(company, industry, signals);
-      const result = { success: true, source: 'rule_based', analysis: mockAnalysis };
-      set(cacheKey, result, 4 * 60 * 60 * 1000); // Cache for 4 hours
-      return jsonResponse(result);
+      const response = successResponse(
+        { analysis: mockAnalysis },
+        {
+          source: 'provider_fallback',
+          provider: 'rule_engine',
+          reason: 'OpenAI API key missing; returned labeled rule-based analysis.',
+          confidence: 0.38
+        }
+      );
+      set(cacheKey, JSON.parse(response.body), 4 * 60 * 60 * 1000);
+      return response;
     }
 
     // AI-powered analysis
     const analysis = await analyzeWithAI(company, industry, signals, rawFindings);
-    const result = { success: true, source: 'ai', analysis };
+    const response = successResponse(
+      { analysis },
+      {
+        source: 'ai_synthesized',
+        provider: 'openai',
+        confidence: analysis?.confidence === 'high' ? 0.82 : analysis?.confidence === 'medium' ? 0.65 : 0.52
+      }
+    );
 
-    set(cacheKey, result, 6 * 60 * 60 * 1000); // Cache for 6 hours
-    return jsonResponse(result);
+    set(cacheKey, JSON.parse(response.body), 6 * 60 * 60 * 1000);
+    return response;
 
   } catch (error) {
     console.error('Error in aggregate-signals:', error);
-    return errorResponse(error.message || 'Failed to aggregate signals');
+    return errorResponse('Failed to aggregate signals', 500, {
+      source: 'ai_synthesized',
+      provider: 'openai'
+    });
   }
 }
 
 async function analyzeWithAI(company, industry, signals, rawFindings) {
   const prompt = buildAnalysisPrompt(company, industry, signals, rawFindings);
+  const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
 
   try {
     const completion = await openai.chat.completions.create({
@@ -69,13 +95,14 @@ async function analyzeWithAI(company, industry, signals, rawFindings) {
       messages: [
         {
           role: "system",
-          content: `You are a senior cybersecurity consultant and business intelligence analyst. Your job is to analyze security-related signals about companies and provide executive-level insights for cybersecurity service providers.
+          content: `You are a senior go-to-market analyst for Laminar Digital. Your job is to analyze trade finance, treasury, settlement, and operations signals about companies and provide executive-level insights for outreach.
 
 Your analysis must be:
 - Business-focused, not technical
 - Actionable for sales/business development
 - Confident but not overstated
 - Based on real business drivers
+- Written for finance and operations decision-makers
 
 Always respond with valid JSON matching the exact schema requested.`
         },
@@ -103,7 +130,7 @@ function buildAnalysisPrompt(company, industry, signals, rawFindings) {
     `- ${s.type}: ${s.details} (Impact: ${s.scoreImpact}, Severity: ${s.severity})`
   ).join('\n');
 
-  return `Analyze this cybersecurity prospect:
+  return `Analyze this trade-finance and settlement prospect:
 
 COMPANY: ${company}
 INDUSTRY: ${industry}
@@ -127,11 +154,14 @@ Provide a comprehensive business analysis in this EXACT JSON format:
     "primaryOpportunity": "Main business opportunity in one sentence",
     "competitivePosition": "How urgency affects their market position",
     "budgetIndicators": "Signals about budget availability/pressure",
-    "decisionMakers": "Likely roles involved in security decisions"
+    "decisionMakers": "Likely roles involved in the decision"
   },
   "outreachTokens": {
-    "painPoint": "primary security concern",
-    "businessImpact": "revenue/compliance impact",
+    "persona_context": "relevant role framing for CFO or trade finance leader",
+    "settlement_risk": "where settlements or exceptions may break down",
+    "liquidity_impact": "working-capital or liquidity effect",
+    "process_friction": "workflow or reconciliation friction",
+    "counterparty_risk": "counterparty or document risk",
     "timeframe": "urgency timeframe",
     "credibilityHook": "relevant industry/company insight"
   },
@@ -142,7 +172,7 @@ Provide a comprehensive business analysis in this EXACT JSON format:
   "recommendedApproach": "executive or technical approach based on signals"
 }
 
-Focus on BUSINESS IMPACT, not technical details. This analysis will be used by sales professionals.`;
+Focus on BUSINESS IMPACT, not technical details. De-prioritize cyber-only framing unless it clearly affects financial operations. This analysis will be used by sales professionals.`;
 }
 
 function generateMockAnalysis(company, industry, signals) {
@@ -150,50 +180,53 @@ function generateMockAnalysis(company, industry, signals) {
   const urgencyScore = Math.min(95, 60 + (highImpactSignals.length * 10));
 
   const industryPainPoints = {
-    'Healthcare': 'HIPAA compliance and patient data protection',
-    'Finance': 'PCI DSS compliance and fraud prevention',
-    'Software': 'API security and customer data protection',
-    'Manufacturing': 'OT security and supply chain protection',
-    'default': 'regulatory compliance and data protection'
+    'Healthcare': 'document-heavy approvals and delayed settlement visibility',
+    'Finance': 'liquidity drag, exceptions, and reconciliation delays',
+    'Software': 'payments complexity and fragmented approval workflows',
+    'Manufacturing': 'commodity settlement coordination and counterparty friction',
+    'default': 'manual workflow friction and weak settlement visibility'
   };
 
   const decisionCards = {
     whyNow: [
       highImpactSignals.length > 0 ? `Recent ${highImpactSignals[0].details.toLowerCase()}` : 'Increasing regulatory pressure',
       'Budget cycles typically closing soon',
-      'Competitive advantage through security leadership'
+      'Pressure to improve operating control without adding more headcount'
     ],
     firstMoves: [
-      'Executive security assessment',
-      'Compliance gap analysis',
-      'Risk prioritization workshop'
+      'Review settlement exceptions and timing leakage',
+      'Map approval bottlenecks across treasury and operations',
+      'Prioritize one workflow with measurable liquidity impact'
     ],
     risksOfWaiting: [
-      'Regulatory penalties and fines',
-      'Competitive security disadvantage',
-      'Incident response unpreparedness'
+      'More manual work and delayed settlements',
+      'Working-capital drag remains hidden',
+      'Counterparty friction compounds across teams'
     ]
   };
 
   return {
-    executiveSummary: `${company} shows ${urgencyScore > 70 ? 'high' : 'moderate'} potential for cybersecurity engagement based on recent signals. ${industry} companies face increasing regulatory and competitive pressure.`,
+    executiveSummary: `${company} shows ${urgencyScore > 70 ? 'high' : 'moderate'} potential for trade-finance and settlement improvement based on recent signals. ${industry} teams are under pressure to reduce friction while improving control.`,
     urgencyScore,
     confidence: highImpactSignals.length > 1 ? 'high' : 'medium',
     decisionCards,
     aiInsights: {
-      primaryOpportunity: `${industryPainPoints[industry] || industryPainPoints.default} presents immediate engagement opportunity`,
-      competitivePosition: 'Proactive security investment provides competitive differentiation',
-      budgetIndicators: highImpactSignals.length > 0 ? 'Strong budget signals present' : 'Standard budget cycle timing',
-      decisionMakers: 'CISO, CTO, and compliance leadership likely involved'
+      primaryOpportunity: `${industryPainPoints[industry] || industryPainPoints.default} presents an immediate workflow-improvement opportunity`,
+      competitivePosition: 'Faster, cleaner settlement execution improves resilience and capital efficiency',
+      budgetIndicators: highImpactSignals.length > 0 ? 'Signals suggest current pressure to fund operational improvements' : 'Budget timing is plausible but not yet explicit',
+      decisionMakers: 'CFO, head of trade finance, treasury, and settlement operations leadership are likely involved'
     },
     outreachTokens: {
-      painPoint: industryPainPoints[industry] || industryPainPoints.default,
-      businessImpact: 'operational efficiency and compliance confidence',
+      persona_context: 'Framed for a finance or operations leader responsible for timing, liquidity, and control',
+      settlement_risk: 'reconciliation and settlement exceptions create avoidable exposure',
+      liquidity_impact: 'manual delays can tie up working capital and slow decision-making',
+      process_friction: industryPainPoints[industry] || industryPainPoints.default,
+      counterparty_risk: 'handoff gaps increase document, timing, and counterparty risk',
       timeframe: urgencyScore > 80 ? 'immediate' : 'next quarter',
-      credibilityHook: `${industry} sector security trends and best practices`
+      credibilityHook: `${industry} peers are under pressure to reduce manual exceptions and improve settlement timing`
     },
     signalPriority: signals.map(s => s.type),
-    marketContext: `${industry} sector experiencing heightened security focus due to regulatory changes and threat evolution`,
-    recommendedApproach: urgencyScore > 75 ? 'executive' : 'technical'
+    marketContext: `${industry} sector is under pressure to improve visibility, control, and speed across finance operations`,
+    recommendedApproach: urgencyScore > 75 ? 'executive' : 'operator'
   };
 }

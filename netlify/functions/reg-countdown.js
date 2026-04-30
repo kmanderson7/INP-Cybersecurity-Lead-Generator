@@ -1,7 +1,8 @@
-import { jsonResponse, errorResponse, fetchWithRetry } from '../lib/http.js';
+import { jsonResponse, errorResponse, fetchWithRetry, successResponse } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
 import { createSignal } from '../lib/normalize.js';
+import { attachSignalMeta } from '../lib/source.js';
 
 export async function handler(event) {
   if (event.httpMethod === 'OPTIONS') {
@@ -32,15 +33,33 @@ export async function handler(event) {
       return jsonResponse(cached);
     }
 
-    const signals = await detectRegulatoryCountdown(domain, industry);
-    const result = { success: true, signals, source: 'compliance_intelligence' };
+    const signals = attachSignalMeta(
+      await detectRegulatoryCountdown(domain, industry),
+      {
+        source: 'provider_fallback',
+        provider: 'compliance_rules',
+        confidence: 0.5
+      }
+    );
+    const response = successResponse(
+      { signals },
+      {
+        source: 'provider_fallback',
+        provider: 'compliance_rules',
+        reason: 'Regulatory countdown is currently heuristic/rule-based until OpenAI deadline synthesis is added.',
+        confidence: 0.5
+      }
+    );
 
-    set(cacheKey, result, 24 * 60 * 60 * 1000); // Cache for 24 hours
-    return jsonResponse(result);
+    set(cacheKey, JSON.parse(response.body), 24 * 60 * 60 * 1000);
+    return response;
 
   } catch (error) {
     console.error('Error in reg-countdown:', error);
-    return errorResponse(error.message || 'Failed to analyze regulatory compliance');
+    return errorResponse('Failed to analyze regulatory compliance', 500, {
+      source: 'provider_fallback',
+      provider: 'compliance_rules'
+    });
   }
 }
 

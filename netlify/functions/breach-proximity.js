@@ -1,7 +1,8 @@
-import { jsonResponse, errorResponse, fetchWithRetry } from '../lib/http.js';
+import { jsonResponse, errorResponse, fetchWithRetry, successResponse } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
 import { createSignal } from '../lib/normalize.js';
+import { attachSignalMeta } from '../lib/source.js';
 
 export async function handler(event) {
   if (event.httpMethod === 'OPTIONS') {
@@ -33,14 +34,32 @@ export async function handler(event) {
     }
 
     const signals = await detectBreachProximity(domain, industry, vendors);
-    const result = { success: true, signals, source: 'breach_intelligence' };
+    const source = process.env.NEWS_API_KEY ? 'provider_live' : 'provider_fallback';
+    const response = successResponse(
+      {
+        signals: attachSignalMeta(signals, {
+          source,
+          provider: process.env.NEWS_API_KEY ? 'news_api' : 'security_intelligence_mock',
+          confidence: process.env.NEWS_API_KEY ? 0.71 : 0.34
+        })
+      },
+      {
+        source,
+        provider: process.env.NEWS_API_KEY ? 'news_api' : 'security_intelligence_mock',
+        reason: process.env.NEWS_API_KEY ? undefined : 'News API unavailable; breach proximity includes labeled fallback signals.',
+        confidence: process.env.NEWS_API_KEY ? 0.71 : 0.34
+      }
+    );
 
-    set(cacheKey, result, 8 * 60 * 60 * 1000); // Cache for 8 hours (security news changes frequently)
-    return jsonResponse(result);
+    set(cacheKey, JSON.parse(response.body), 8 * 60 * 60 * 1000);
+    return response;
 
   } catch (error) {
     console.error('Error in breach-proximity:', error);
-    return errorResponse(error.message || 'Failed to analyze breach proximity');
+    return errorResponse('Failed to analyze breach proximity', 500, {
+      source: 'provider_fallback',
+      provider: 'security_intelligence_mock'
+    });
   }
 }
 

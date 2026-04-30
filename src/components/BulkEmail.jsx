@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { getSourceBadge } from '@/lib/sourceMeta';
 import {
   Mail, X, CheckSquare, Square, Users, Send, Eye, Filter,
   AlertCircle, CheckCircle, Clock, Loader2, Target
@@ -15,7 +16,7 @@ const BulkEmail = ({ companies, onClose, netlifyAPI }) => {
   const [emailTemplate, setEmailTemplate] = useState({
     subject: '',
     body: '',
-    persona: 'CISO',
+    persona: 'CFO',
     tone: 'professional'
   });
   const [activeTab, setActiveTab] = useState('compose');
@@ -64,40 +65,41 @@ const BulkEmail = ({ companies, onClose, netlifyAPI }) => {
 
   const generatePersonalizedEmail = (company, persona, tone) => {
     const executive = company.executives?.[0];
-    const executiveTitle = executive?.title || 'IT Decision Maker';
-
-    const toneStyles = {
-      professional: 'formal and respectful',
-      casual: 'friendly and approachable',
-      urgent: 'direct and time-sensitive'
-    };
+    const executiveTitle = executive?.title || 'Finance Decision Maker';
+    const toneContext = tone === 'urgent'
+      ? 'This is time-sensitive because settlement friction compounds quickly.'
+      : tone === 'casual'
+        ? 'Thought this might be useful for a quick comparison against peer teams.'
+        : 'Keeping this concise and focused on operating impact.';
 
     const personaFocus = {
-      CISO: 'security strategy and risk management',
-      CTO: 'technology infrastructure and innovation',
-      COO: 'operational efficiency and business continuity',
-      CFO: 'cost optimization and business value'
+      CFO: 'capital efficiency and liquidity planning',
+      'Head of Trade Finance': 'process friction and settlement timing',
+      'Settlement Manager': 'reconciliation quality and exception handling',
+      'Operations Lead': 'workflow throughput and tooling gaps'
     };
 
     return `Dear ${executive?.name || executiveTitle},
 
-I hope this email finds you well. I'm reaching out regarding cybersecurity opportunities that could benefit ${company.name}.
+I’m reaching out because ${company.name} appears to have trade finance and settlement complexity where small process improvements can materially reduce friction.
 
-Based on our research, we've identified several areas where ${company.name} might strengthen its security posture:
+Based on our research, we’ve identified a few areas worth reviewing:
 
 ${company.concerns?.slice(0, 2).map(concern => `• ${concern}`).join('\n')}
 
-Given your role in ${personaFocus[persona]} at ${company.name}, I believe a brief conversation about your current security initiatives would be valuable.
+Given your role in ${personaFocus[persona]} at ${company.name}, a short conversation about current operating friction could be useful.
 
-Our team has helped similar ${company.industry.toLowerCase()} organizations with ${company.employees} employees enhance their security frameworks while optimizing costs and improving operational efficiency.
+${toneContext}
 
-Would you be available for a 15-minute call next week to discuss how we might support ${company.name}'s security objectives?
+Our team helps firms improve settlement flow, reduce manual rework, and tighten operational control without adding more overhead.
+
+Would you be open to a 15-minute call next week to compare notes on liquidity impact, settlement risk, and workflow bottlenecks?
 
 Best regards,
 [Your Name]
-INP² Security Solutions
+Laminar Digital
 
-P.S. I noticed ${company.name} is using ${company.securityTools?.[0] || 'various security tools'} - I'd be happy to share insights on how organizations are optimizing their security stack in the current threat landscape.`;
+P.S. If useful, I can share a short framework for spotting reconciliation delays, approval bottlenecks, and hidden working-capital drag.`;
   };
 
   const sendBulkEmails = async () => {
@@ -310,6 +312,9 @@ P.S. I noticed ${company.name} is using ${company.securityTools?.[0] || 'various
                               <p className="text-xs text-gray-600">
                                 {company.industry} • {company.employees} employees • {company.executives?.[0]?.email}
                               </p>
+                              <Badge variant="outline" className={`mt-2 text-[10px] ${getSourceBadge(company.sourceMeta).className}`}>
+                                {getSourceBadge(company.sourceMeta).label}
+                              </Badge>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
@@ -344,10 +349,10 @@ P.S. I noticed ${company.name} is using ${company.securityTools?.[0] || 'various
                       value={emailTemplate.persona}
                       onChange={(e) => setEmailTemplate(prev => ({ ...prev, persona: e.target.value }))}
                     >
-                      <option value="CISO">CISO (Security Focus)</option>
-                      <option value="CTO">CTO (Technology Focus)</option>
-                      <option value="COO">COO (Operations Focus)</option>
-                      <option value="CFO">CFO (Cost Focus)</option>
+                      <option value="CFO">CFO (Liquidity & Capital)</option>
+                      <option value="Head of Trade Finance">Head of Trade Finance</option>
+                      <option value="Settlement Manager">Settlement Manager</option>
+                      <option value="Operations Lead">Operations Lead</option>
                     </select>
                   </div>
                   <div>

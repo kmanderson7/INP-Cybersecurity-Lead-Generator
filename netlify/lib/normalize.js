@@ -1,8 +1,10 @@
-const { createHash } = require('crypto');
+import { createHash } from 'crypto';
 const signalCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
-export function createSignal(type, severity, scoreImpact, details, evidence = []) {
+import { normalizeConfidence } from './source.js';
+
+export function createSignal(type, severity, scoreImpact, details, evidence = [], meta = {}) {
   return {
     id: generateSignalId(type, details),
     type,
@@ -11,7 +13,11 @@ export function createSignal(type, severity, scoreImpact, details, evidence = []
     occurredAt: new Date().toISOString(),
     details,
     evidence,
-    confidence: evidence.length > 3 ? 'high' : evidence.length > 1 ? 'medium' : 'low',
+    confidence: normalizeConfidence(
+      meta.confidence,
+      evidence.length > 3 ? 0.85 : evidence.length > 1 ? 0.65 : 0.45
+    ),
+    meta
   };
 }
 

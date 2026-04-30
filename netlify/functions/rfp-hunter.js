@@ -1,81 +1,289 @@
-import { jsonResponse, errorResponse, fetchWithRetry } from '../lib/http.js';
+import { jsonResponse, errorResponse, fetchWithRetry, successResponse } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
 import { createSignal } from '../lib/normalize.js';
+import { randomUUID } from 'crypto';
+import {
+  attachSignalMeta,
+  logProviderEvent,
+  requireLiveDataEnabled
+} from '../lib/source.js';
+
+const PROCUREMENT_KEYWORDS = [
+  'trade finance',
+  'settlement',
+  'treasury',
+  'payments',
+  'reconciliation',
+  'commodity',
+  'middle office',
+  'working capital'
+];
 
 export async function handler(event) {
   if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'POST, OPTIONS' } };
+    return {
+      statusCode: 204,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS'
+      }
+    };
   }
 
   if (event.httpMethod !== 'POST') {
-    return errorResponse('Method Not Allowed', 405);
+    return errorResponse('Method Not Allowed', 405, {
+      source: 'provider_fallback',
+      provider: 'rfp_hunter'
+    });
   }
 
   const clientIP = event.headers['client-ip'] || event.headers['x-forwarded-for'] || 'anonymous';
   const rateCheck = checkRateLimit(`rfp_${clientIP}`, 25, 60 * 60 * 1000);
 
   if (!rateCheck.allowed) {
-    return errorResponse('Rate limit exceeded', 429);
+    return errorResponse('Rate limit exceeded', 429, {
+      source: 'provider_fallback',
+      provider: 'rfp_hunter'
+    });
   }
 
   try {
     const { domain, company, industry } = JSON.parse(event.body || '{}');
 
-    const cacheKey = getCacheKey('rfp_hunter', 'search', { industry });
+    const cacheKey = getCacheKey(domain || company || industry || 'rfp', 'search', { industry, company });
     const cached = get(cacheKey);
     if (cached) {
       return jsonResponse(cached);
     }
 
-    const signals = await huntSecurityRFPs(domain, company, industry);
-    const result = { success: true, signals, source: 'rfp_intelligence' };
+    const liveResult = await searchLiveRfps(company, industry);
+    if (liveResult) {
+      const response = successResponse(liveResult.data, liveResult.meta);
+      set(cacheKey, JSON.parse(response.body), 8 * 60 * 60 * 1000);
+      return response;
+    }
 
-    set(cacheKey, result, 8 * 60 * 60 * 1000); // Cache for 8 hours
-    return jsonResponse(result);
+    if (requireLiveDataEnabled()) {
+      return errorResponse('Live RFP data is required but SAM.gov is not configured or reachable.', 503, {
+        source: 'provider_fallback',
+        provider: 'rfp_hunter',
+        reason: 'REQUIRE_LIVE_DATA blocked heuristic RFP fallback.'
+      });
+    }
 
+    const signals = attachSignalMeta(
+      await huntFallbackRfps(domain, company, industry),
+      {
+        source: 'provider_fallback',
+        provider: 'rfp_scrape',
+        confidence: 0.54
+      }
+    );
+
+    const response = successResponse(
+      { signals },
+      {
+        source: 'provider_fallback',
+        provider: 'rfp_scrape',
+        reason: 'Used procurement-page scraping because live SAM.gov data was unavailable.',
+        confidence: 0.54
+      }
+    );
+
+    set(cacheKey, JSON.parse(response.body), 8 * 60 * 60 * 1000);
+    return response;
   } catch (error) {
     console.error('Error in rfp-hunter:', error);
-    return errorResponse(error.message || 'Failed to hunt RFPs');
+    return errorResponse('Failed to hunt RFPs', 500, {
+      source: 'provider_fallback',
+      provider: 'rfp_hunter'
+    });
   }
 }
 
-async function huntSecurityRFPs(domain, company, industry) {
+async function searchLiveRfps(company, industry) {
+  if (!process.env.SAM_GOV_API_KEY) {
+    return null;
+  }
+
+  const correlationId = randomUUID();
+  const startedAt = Date.now();
+
+  try {
+    const opportunities = await fetchSamGovOpportunities(company, industry);
+    const rawSignals = opportunities.map((opportunity) => opportunityToSignal(opportunity)).filter(Boolean);
+    const signals = attachSignalMeta(rawSignals, {
+      source: 'provider_live',
+      provider: 'sam_gov',
+      confidence: rawSignals.length ? 0.82 : 0.76,
+      correlationId
+    });
+
+    logProviderEvent({
+      functionName: 'rfp-hunter',
+      provider: 'sam_gov',
+      correlationId,
+      startedAt,
+      status: 'success',
+      reason: `results=${opportunities.length} signals=${signals.length}`
+    });
+
+    return {
+      data: {
+        signals,
+        opportunities: opportunities.slice(0, 6).map((item) => ({
+          noticeId: item.noticeId,
+          title: item.title,
+          department: item.department || item.fullParentPathName,
+          dueDate: extractResponseDate(item),
+          postedDate: item.postedDate,
+          link: item.uiLink || item.link || item.resourceLinks?.[0]?.href || null
+        }))
+      },
+      meta: {
+        source: 'provider_live',
+        provider: 'sam_gov',
+        reason: signals.length
+          ? 'Live opportunities were pulled from SAM.gov.'
+          : 'SAM.gov returned no active trade-finance or settlement opportunities for the current search window.',
+        confidence: signals.length ? 0.82 : 0.76,
+        correlationId
+      }
+    };
+  } catch (error) {
+    logProviderEvent({
+      functionName: 'rfp-hunter',
+      provider: 'sam_gov',
+      correlationId,
+      startedAt,
+      status: 'failure',
+      reason: 'request_failed'
+    });
+    return null;
+  }
+}
+
+async function fetchSamGovOpportunities(company, industry) {
+  const postedTo = new Date();
+  const postedFrom = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
+  const formattedFrom = formatSamDate(postedFrom);
+  const formattedTo = formatSamDate(postedTo);
+
+  const searchTerms = [
+    industry === 'Finance' ? 'trade finance' : null,
+    company ? `${company} settlement` : null,
+    'trade finance',
+    'settlement',
+    'treasury',
+    'payments'
+  ].filter(Boolean);
+
+  const results = [];
+  for (const term of searchTerms.slice(0, 3)) {
+    const url = `https://api.sam.gov/opportunities/v2/search?api_key=${encodeURIComponent(process.env.SAM_GOV_API_KEY)}&postedFrom=${encodeURIComponent(formattedFrom)}&postedTo=${encodeURIComponent(formattedTo)}&limit=10&offset=0&ptype=o&title=${encodeURIComponent(term)}`;
+    const response = await fetchWithRetry(url, {}, 2, 12000);
+    const payload = await response.json();
+    const opportunities = Array.isArray(payload.opportunitiesData) ? payload.opportunitiesData : [];
+    results.push(...opportunities);
+  }
+
+  const unique = new Map();
+  for (const opportunity of results) {
+    if (matchesProcurementFocus(opportunity) && !unique.has(opportunity.noticeId)) {
+      unique.set(opportunity.noticeId, opportunity);
+    }
+  }
+
+  return Array.from(unique.values()).slice(0, 10);
+}
+
+function formatSamDate(date) {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${month}/${day}/${year}`;
+}
+
+function matchesProcurementFocus(opportunity = {}) {
+  const text = `${opportunity.title || ''} ${opportunity.description || ''}`.toLowerCase();
+  return PROCUREMENT_KEYWORDS.some((keyword) => text.includes(keyword));
+}
+
+function opportunityToSignal(opportunity) {
+  const dueDate = extractResponseDate(opportunity);
+  const postedDate = opportunity.postedDate ? new Date(opportunity.postedDate) : null;
+  const daysToDue = dueDate ? Math.max(0, Math.round((new Date(dueDate) - Date.now()) / (1000 * 60 * 60 * 24))) : null;
+  const severity = daysToDue !== null && daysToDue <= 30 ? 'high' : 'medium';
+  const scoreImpact = daysToDue !== null && daysToDue <= 30 ? 34 : 26;
+  const evidence = [
+    opportunity.solicitationNumber ? `Solicitation: ${opportunity.solicitationNumber}` : null,
+    postedDate ? `Posted: ${postedDate.toISOString().slice(0, 10)}` : null,
+    dueDate ? `Due: ${dueDate}` : 'Response deadline unavailable',
+    opportunity.uiLink || opportunity.link || null
+  ].filter(Boolean);
+
+  return createSignal(
+    'rfp',
+    severity,
+    scoreImpact,
+    `${opportunity.title} (${opportunity.department || opportunity.fullParentPathName || 'SAM.gov'})`,
+    evidence,
+    { confidence: 0.82 }
+  );
+}
+
+function extractResponseDate(opportunity = {}) {
+  const candidates = [
+    opportunity.responseDeadLine,
+    opportunity.responseDeadline,
+    opportunity.archiveDate,
+    opportunity.closeDate
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const parsed = new Date(candidate);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString().slice(0, 10);
+    }
+  }
+
+  return null;
+}
+
+async function huntFallbackRfps(domain, company, industry) {
   const signals = [];
 
   try {
-    // Check company website for RFP/procurement pages
-    const companyRFPs = await checkCompanyRFPs(domain);
-    signals.push(...companyRFPs);
+    const companySignals = await checkCompanyProcurementPages(domain);
+    signals.push(...companySignals);
 
-    // Simulate industry RFP monitoring (in production, would use specialized RFP aggregation services)
-    const industryRFPs = await checkIndustryRFPs(industry);
-    signals.push(...industryRFPs);
+    const industrySignals = generateIndustryFallback(industry);
+    signals.push(...industrySignals);
 
-    // Check for security-specific procurement indicators
-    const securityRFPs = await checkSecurityProcurement(domain, company);
-    signals.push(...securityRFPs);
-
+    const readinessSignals = await checkProcurementReadiness(domain, company);
+    signals.push(...readinessSignals);
   } catch (error) {
-    console.error('Error hunting RFPs:', error);
+    console.error('Error hunting fallback RFPs:', error);
   }
 
   return signals;
 }
 
-async function checkCompanyRFPs(domain) {
-  const signals = [];
+async function checkCompanyProcurementPages(domain) {
+  if (!domain) {
+    return [];
+  }
 
+  const signals = [];
   const procurementPages = [
     '/procurement',
     '/rfp',
-    '/rfq',
     '/vendor',
     '/suppliers',
     '/sourcing',
     '/purchasing',
-    '/bid',
-    '/tender',
     '/contracts'
   ];
 
@@ -90,11 +298,9 @@ async function checkCompanyRFPs(domain) {
 
       if (response.ok) {
         const html = await response.text();
-        const rfpSignals = parseRFPContent(html, url);
-        signals.push(...rfpSignals);
+        signals.push(...parseRfpContent(html, url));
       }
-    } catch (error) {
-      // Skip failed pages
+    } catch {
       continue;
     }
   }
@@ -102,123 +308,59 @@ async function checkCompanyRFPs(domain) {
   return signals;
 }
 
-function parseRFPContent(html, sourceUrl) {
-  const signals = [];
+function parseRfpContent(html, sourceUrl) {
   const lowerHtml = html.toLowerCase();
+  const hasRfpLanguage = ['request for proposal', 'rfp', 'rfq', 'vendor selection', 'solicitation']
+    .some((indicator) => lowerHtml.includes(indicator));
+  const focusHits = PROCUREMENT_KEYWORDS.filter((keyword) => lowerHtml.includes(keyword));
 
-  const securityKeywords = [
-    'cybersecurity', 'information security', 'network security',
-    'endpoint security', 'security assessment', 'penetration testing',
-    'security audit', 'compliance audit', 'risk assessment',
-    'security monitoring', 'siem', 'soc', 'incident response',
-    'vulnerability management', 'identity management', 'access control'
-  ];
+  if (!hasRfpLanguage || focusHits.length === 0) {
+    return [];
+  }
 
-  const rfpIndicators = [
-    'request for proposal', 'rfp', 'request for quote', 'rfq',
-    'invitation to bid', 'itb', 'call for bids', 'solicitation',
-    'procurement opportunity', 'vendor selection', 'competitive bid'
-  ];
-
-  const hasRFPLanguage = rfpIndicators.some(indicator => lowerHtml.includes(indicator));
-  const securityMentions = securityKeywords.filter(keyword => lowerHtml.includes(keyword));
-
-  if (hasRFPLanguage && securityMentions.length > 0) {
-    // Extract potential due dates
-    const dates = extractProcurementDates(html);
-    const isActive = dates.some(date => date > new Date());
-
-    signals.push(createSignal(
+  return [
+    createSignal(
       'rfp',
-      isActive ? 'high' : 'medium',
-      isActive ? 40 : 25,
-      `Security RFP/procurement page found with ${securityMentions.length} security mentions`,
-      [sourceUrl]
-    ));
-  }
-
-  return signals;
-}
-
-function extractProcurementDates(html) {
-  const dates = [];
-
-  // Common date patterns in procurement documents
-  const datePatterns = [
-    /due\s+(?:date|by):?\s*([a-z]+ \d{1,2},? \d{4})/gi,
-    /deadline:?\s*([a-z]+ \d{1,2},? \d{4})/gi,
-    /closes?\s+(?:on|at):?\s*([a-z]+ \d{1,2},? \d{4})/gi,
-    /submission\s+(?:due|deadline):?\s*([a-z]+ \d{1,2},? \d{4})/gi
+      'medium',
+      22,
+      `Procurement page shows ${focusHits.length} trade-finance or settlement buying signals`,
+      [sourceUrl],
+      { confidence: 0.54 }
+    )
   ];
-
-  for (const pattern of datePatterns) {
-    let match;
-    while ((match = pattern.exec(html)) !== null) {
-      try {
-        const date = new Date(match[1]);
-        if (date && date > new Date('2020-01-01')) {
-          dates.push(date);
-        }
-      } catch (error) {
-        // Skip invalid dates
-      }
-    }
-  }
-
-  return dates;
 }
 
-async function checkIndustryRFPs(industry) {
-  const signals = [];
+function generateIndustryFallback(industry) {
+  if (!industry) {
+    return [];
+  }
 
-  // Simulate industry-specific RFP monitoring
-  // In production, would integrate with:
-  // - Government RFP databases (SAM.gov, BidNet, etc.)
-  // - Private sector RFP aggregators
-  // - Industry-specific procurement platforms
-
-  const industryRFPProb = {
-    'Government': 0.4,    // High RFP activity
-    'Healthcare': 0.3,    // Moderate RFP activity
-    'Finance': 0.25,      // Moderate RFP activity
-    'Education': 0.35,    // Moderate-high RFP activity
-    'Manufacturing': 0.2, // Lower RFP activity
-    'Software': 0.15      // Lowest RFP activity
+  const focusAreas = {
+    Finance: 'treasury transformation',
+    Manufacturing: 'commodity settlement operations',
+    Energy: 'trade settlement workflows',
+    Software: 'payments operations modernization'
   };
 
-  const probability = industryRFPProb[industry] || 0.2;
+  const focus = focusAreas[industry] || 'finance operations modernization';
 
-  if (Math.random() < probability) {
-    const rfpTypes = [
-      'Security Assessment Services',
-      'Network Security Infrastructure',
-      'Endpoint Protection Platform',
-      'Security Monitoring and SIEM',
-      'Incident Response Services',
-      'Penetration Testing Services',
-      'Compliance Audit Services',
-      'Identity Management System'
-    ];
-
-    const rfpType = rfpTypes[Math.floor(Math.random() * rfpTypes.length)];
-    const daysFromNow = Math.floor(Math.random() * 60) + 15; // 15-75 days from now
-
-    signals.push(createSignal(
+  return [
+    createSignal(
       'rfp',
-      'high',
-      40,
-      `${industry} sector RFP detected: ${rfpType} (due in ~${daysFromNow} days)`,
-      ['industry_rfp_monitoring']
-    ));
-  }
-
-  return signals;
+      'medium',
+      24,
+      `${industry} procurement activity indicates active interest in ${focus}`,
+      ['industry procurement heuristics'],
+      { confidence: 0.5 }
+    )
+  ];
 }
 
-async function checkSecurityProcurement(domain, company) {
-  const signals = [];
+async function checkProcurementReadiness(domain, company) {
+  if (!domain) {
+    return [];
+  }
 
-  // Check for security vendor evaluation indicators
   try {
     const url = `https://${domain}`;
     const response = await fetchWithRetry(url, {
@@ -227,42 +369,35 @@ async function checkSecurityProcurement(domain, company) {
       }
     }, 1, 5000);
 
-    if (response.ok) {
-      const html = await response.text();
-      const procurementSignals = analyzeProcurementSignals(html, domain);
-      signals.push(...procurementSignals);
+    if (!response.ok) {
+      return [];
     }
-  } catch (error) {
-    // Skip if website unavailable
+
+    const html = await response.text();
+    const indicators = [
+      'vendor registration',
+      'supplier portal',
+      'procurement process',
+      'payment operations',
+      'reconciliation',
+      'trade finance'
+    ].filter((indicator) => html.toLowerCase().includes(indicator));
+
+    if (indicators.length < 2) {
+      return [];
+    }
+
+    return [
+      createSignal(
+        'rfp',
+        'low',
+        16,
+        `${company || 'Company'} appears procurement-ready with ${indicators.length} finance operations indicators`,
+        [url],
+        { confidence: 0.5 }
+      )
+    ];
+  } catch {
+    return [];
   }
-
-  return signals;
-}
-
-function analyzeProcurementSignals(html, domain) {
-  const signals = [];
-  const lowerHtml = html.toLowerCase();
-
-  // Procurement readiness indicators
-  const procurementIndicators = [
-    'vendor registration', 'supplier portal', 'procurement process',
-    'security requirements', 'vendor requirements', 'compliance requirements',
-    'procurement guidelines', 'vendor onboarding', 'supplier qualification'
-  ];
-
-  const foundIndicators = procurementIndicators.filter(indicator =>
-    lowerHtml.includes(indicator)
-  );
-
-  if (foundIndicators.length >= 2) {
-    signals.push(createSignal(
-      'rfp',
-      'medium',
-      20,
-      `Procurement-ready organization with ${foundIndicators.length} vendor process indicators`,
-      [`https://${domain}`]
-    ));
-  }
-
-  return signals;
 }
