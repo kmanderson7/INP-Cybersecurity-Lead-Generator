@@ -2,6 +2,7 @@ import { jsonResponse, errorResponse } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
 import { calculateScore, createSignal } from '../lib/normalize.js';
+import { requireLiveDataEnabled } from '../lib/source.js';
 import OpenAI from 'openai';
 
 export async function handler(event) {
@@ -38,10 +39,17 @@ export async function handler(event) {
 
     const openaiKey = process.env.OPENAI_API_KEY;
     if (!openaiKey) {
+      if (requireLiveDataEnabled()) {
+        return errorResponse('Live AI analysis is required but OPENAI_API_KEY is not configured.', 503, {
+          source: 'provider_fallback',
+          provider: 'openai',
+          reason: 'REQUIRE_LIVE_DATA blocked heuristic analysis fallback.'
+        });
+      }
       console.warn('OpenAI API key missing, using fallback analysis');
       const fallbackAnalysis = generateFallbackAnalysis(content, analysisType, context);
       const result = { success: true, source: 'fallback_ai', analysis: fallbackAnalysis };
-      set(cacheKey, result, 2 * 60 * 60 * 1000); // Cache for 2 hours
+      set(cacheKey, result, 2 * 60 * 60 * 1000);
       return jsonResponse(result);
     }
 

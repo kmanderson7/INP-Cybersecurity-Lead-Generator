@@ -3,6 +3,7 @@ import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
 import { scorePerson, SCORING_PROFILES } from '../lib/normalize.js';
 import { normalizeTradeFinanceContact } from '../lib/tradeFinanceContacts.js';
+import { requireLiveDataEnabled } from '../lib/source.js';
 
 const APOLLO_BASE_URL = 'https://api.apollo.io/api/v1';
 
@@ -63,6 +64,13 @@ export async function handler(event) {
       : process.env.APOLLO_API_KEY;
 
     if (!apiKey) {
+      if (requireLiveDataEnabled()) {
+        return errorResponse('Live person enrichment is required but no Apollo API key is configured.', 503, {
+          source: 'provider_fallback',
+          provider: 'apollo_person_enrich',
+          reason: 'REQUIRE_LIVE_DATA blocked mock enrichment fallback.'
+        });
+      }
       const mockPerson = generateMockEnrichment(body, profile);
       const result = {
         success: true,
@@ -87,7 +95,15 @@ export async function handler(event) {
         return jsonResponse(result);
       }
     } catch (error) {
-      console.warn('Apollo person enrichment failed, falling back to mock:', error.message);
+      console.warn('Apollo person enrichment failed:', error.message);
+    }
+
+    if (requireLiveDataEnabled()) {
+      return errorResponse('Live person enrichment is required but Apollo returned no result.', 503, {
+        source: 'provider_fallback',
+        provider: 'apollo_person_enrich',
+        reason: 'REQUIRE_LIVE_DATA blocked mock enrichment fallback after live failure.'
+      });
     }
 
     const mockPerson = generateMockEnrichment(body, profile);

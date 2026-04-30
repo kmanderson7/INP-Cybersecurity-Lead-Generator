@@ -3,6 +3,7 @@ import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
 import { calculateScore, SCORING_PROFILES } from '../lib/normalize.js';
 import { LAMINAR_SEGMENTS, LAMINAR_SEGMENT_ORDER } from '../lib/laminarPilot.js';
+import { requireLiveDataEnabled } from '../lib/source.js';
 
 const APOLLO_BASE_URL = 'https://api.apollo.io/api/v1';
 
@@ -70,6 +71,13 @@ export async function handler(event) {
       : process.env.APOLLO_API_KEY;
 
     if (!apiKey) {
+      if (requireLiveDataEnabled()) {
+        return errorResponse('Live company search is required but no Apollo API key is configured.', 503, {
+          source: 'provider_fallback',
+          provider: 'apollo_company_search',
+          reason: 'REQUIRE_LIVE_DATA blocked mock company fallback.'
+        });
+      }
       const mockLeads = generateMockCompanies(keywords, profile);
       const result = {
         success: true,
@@ -94,7 +102,15 @@ export async function handler(event) {
         return jsonResponse(result);
       }
     } catch (error) {
-      console.warn('Apollo company search failed, falling back to mock:', error.message);
+      console.warn('Apollo company search failed:', error.message);
+    }
+
+    if (requireLiveDataEnabled()) {
+      return errorResponse('Live company search is required but Apollo returned no results.', 503, {
+        source: 'provider_fallback',
+        provider: 'apollo_company_search',
+        reason: 'REQUIRE_LIVE_DATA blocked mock company fallback after live failure.'
+      });
     }
 
     const mockLeads = generateMockCompanies(keywords, profile);

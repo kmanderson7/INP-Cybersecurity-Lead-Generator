@@ -1,5 +1,6 @@
 import { jsonResponse, errorResponse, successResponse } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
+import { requireLiveDataEnabled } from '../lib/source.js';
 
 export async function handler(event) {
   if (event.httpMethod === 'OPTIONS') {
@@ -41,6 +42,14 @@ export async function handler(event) {
     const emailProvider = process.env.EMAIL_PROVIDER || 'sendgrid';
     const hasProviderKey = (emailProvider === 'sendgrid' && process.env.SENDGRID_API_KEY)
       || (emailProvider === 'mailgun' && process.env.MAILGUN_API_KEY && process.env.MAILGUN_DOMAIN);
+
+    if (!hasProviderKey && requireLiveDataEnabled()) {
+      return errorResponse('Live email send is required but no SendGrid or Mailgun key is configured.', 503, {
+        source: 'provider_fallback',
+        provider: 'email',
+        reason: 'REQUIRE_LIVE_DATA blocked simulated email send.'
+      });
+    }
 
     const result = hasProviderKey
       ? emailProvider === 'mailgun'

@@ -3,6 +3,7 @@ import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
 import { scorePerson, SCORING_PROFILES } from '../lib/normalize.js';
 import { qualifyTradeFinanceContacts } from '../lib/tradeFinanceContacts.js';
+import { requireLiveDataEnabled } from '../lib/source.js';
 
 const APOLLO_BASE_URL = 'https://api.apollo.io/api/v1';
 
@@ -61,6 +62,13 @@ export async function handler(event) {
       : process.env.APOLLO_API_KEY;
 
     if (!apiKey) {
+      if (requireLiveDataEnabled()) {
+        return errorResponse('Live people data is required but no Apollo API key is configured.', 503, {
+          source: 'provider_fallback',
+          provider: 'apollo_people_search',
+          reason: 'REQUIRE_LIVE_DATA blocked mock people fallback.'
+        });
+      }
       const mockPeople = generateMockPeople(titles, domains, profile);
       const result = {
         success: true,
@@ -85,7 +93,15 @@ export async function handler(event) {
         return jsonResponse(result);
       }
     } catch (error) {
-      console.warn('Apollo people search failed, falling back to mock:', error.message);
+      console.warn('Apollo people search failed:', error.message);
+    }
+
+    if (requireLiveDataEnabled()) {
+      return errorResponse('Live people data is required but Apollo returned no results.', 503, {
+        source: 'provider_fallback',
+        provider: 'apollo_people_search',
+        reason: 'REQUIRE_LIVE_DATA blocked mock people fallback after live failure.'
+      });
     }
 
     const mockPeople = generateMockPeople(titles, domains, profile);

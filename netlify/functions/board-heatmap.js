@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { attachSignalMeta } from '../lib/source.js';
+import { attachSignalMeta, requireLiveDataEnabled } from '../lib/source.js';
 import { errorResponse, successResponse } from '../lib/http.js';
 
 function generateCacheKey(domain, company) {
@@ -70,6 +70,14 @@ export async function handler(event) {
       return errorResponse('Domain and company name are required', 400, {
         source: 'provider_fallback',
         provider: 'board_heat_model'
+      });
+    }
+
+    if (requireLiveDataEnabled()) {
+      return errorResponse('Live board heatmap data is required but no ingestion provider is configured.', 503, {
+        source: 'provider_fallback',
+        provider: 'board_heat_model',
+        reason: 'REQUIRE_LIVE_DATA blocked synthetic board heatmap. Awaiting SEC/earnings-call ingestion.'
       });
     }
 

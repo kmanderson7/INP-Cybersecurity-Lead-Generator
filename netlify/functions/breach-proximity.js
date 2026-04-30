@@ -2,7 +2,7 @@ import { jsonResponse, errorResponse, fetchWithRetry, successResponse } from '..
 import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
 import { createSignal } from '../lib/normalize.js';
-import { attachSignalMeta } from '../lib/source.js';
+import { attachSignalMeta, requireLiveDataEnabled } from '../lib/source.js';
 
 export async function handler(event) {
   if (event.httpMethod === 'OPTIONS') {
@@ -91,6 +91,7 @@ async function checkDirectBreachMentions(domain) {
   const newsKey = process.env.NEWS_API_KEY; // Use the correct env var name
 
   if (!newsKey) {
+    if (requireLiveDataEnabled()) return [];
     console.warn('News API key missing, using mock data for breach proximity');
     return generateMockBreachSignals(domain, 'direct');
   }
@@ -184,7 +185,7 @@ async function checkDirectBreachMentions(domain) {
 
   } catch (error) {
     console.error('Error checking direct breach mentions:', error);
-    // Fallback to mock data
+    if (requireLiveDataEnabled()) return [];
     return generateMockBreachSignals(domain, 'direct');
   }
 
@@ -348,6 +349,7 @@ async function checkVendorBreaches(vendors, industry) {
 
   const targetVendors = [...vendors, ...(industryVendors[industry] || [])];
 
+  if (requireLiveDataEnabled()) return signals;
   // Simulate vendor breach checking (in production, would check security feeds)
   if (targetVendors.length > 0 && Math.random() > 0.8) { // 20% chance
     const affectedVendor = targetVendors[Math.floor(Math.random() * targetVendors.length)];
@@ -378,6 +380,7 @@ async function checkIndustryBreaches(industry) {
     'Education': { keywords: ['FERPA', 'student data', 'academic'], riskLevel: 'medium' }
   };
 
+  if (requireLiveDataEnabled()) return signals;
   const risk = industryRisks[industry];
   if (risk && Math.random() > 0.6) { // 40% chance of industry-related signal
 
