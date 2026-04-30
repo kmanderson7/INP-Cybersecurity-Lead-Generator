@@ -182,6 +182,98 @@ export function getPriority(score) {
   return 'Low';
 }
 
+export const SCORING_PROFILES = {
+  cybersecurity: {
+    label: 'Cybersecurity',
+    titleKeywords: [
+      'ciso', 'chief information security officer',
+      'cto', 'chief technology officer',
+      'cio', 'chief information officer',
+      'it director', 'director of it',
+      'vp security', 'head of security',
+      'chief risk officer', 'head of risk',
+      'head of grc', 'grc',
+      'privacy officer', 'dpo', 'data protection officer',
+      'security'
+    ],
+    industryKeywords: [
+      'healthcare', 'health', 'medical',
+      'finance', 'financial', 'banking', 'fintech',
+      'software', 'saas', 'technology', 'tech',
+      'government', 'public sector',
+      'energy', 'utilities',
+      'manufacturing',
+      'legal',
+      'education'
+    ]
+  },
+  commodity_trading: {
+    label: 'Commodity Trading',
+    titleKeywords: [
+      'cfo', 'chief financial officer',
+      'treasurer',
+      'trade finance',
+      'settlement',
+      'operations',
+      'general counsel',
+      'risk',
+      'vp finance'
+    ],
+    industryKeywords: [
+      'oil', 'gas', 'energy',
+      'commodity', 'trading',
+      'midstream',
+      'banking', 'finance'
+    ]
+  }
+};
+
+export function scorePerson(person, profile = 'cybersecurity') {
+  const profileDef = SCORING_PROFILES[profile] || SCORING_PROFILES.cybersecurity;
+  const reasons = [];
+  let score = 0;
+
+  const title = (person.title || '').toLowerCase();
+  const company = person.organization || person.company || {};
+  const companyName = typeof company === 'string' ? company : (company.name || '');
+  const industry = (typeof company === 'object' ? (company.industry || '') : '').toLowerCase();
+
+  const matchedTitle = profileDef.titleKeywords.find(term => title.includes(term));
+  if (matchedTitle) {
+    score += 40;
+    reasons.push(`High-intent title (matched "${matchedTitle}"): +40`);
+  }
+
+  const matchedIndustry = profileDef.industryKeywords.find(term => industry.includes(term));
+  if (matchedIndustry) {
+    score += 30;
+    reasons.push(`Relevant industry (matched "${matchedIndustry}"): +30`);
+  }
+
+  if (person.linkedin_url || person.linkedinUrl) {
+    score += 10;
+    reasons.push('LinkedIn profile available: +10');
+  }
+
+  if (person.email) {
+    score += 20;
+    reasons.push('Email available: +20');
+  }
+
+  return {
+    name: person.name || [person.first_name, person.last_name].filter(Boolean).join(' ') || null,
+    title: person.title || null,
+    company: companyName || null,
+    industry: (typeof company === 'object' ? company.industry : null) || null,
+    linkedin: person.linkedin_url || person.linkedinUrl || null,
+    email: person.email || null,
+    score,
+    priority: getPriority(score),
+    scoreReasons: reasons,
+    profile
+  };
+}
+
 function calculateBaseScore(company) {
   let base = 20; // Minimum base score
 

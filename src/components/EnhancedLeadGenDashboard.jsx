@@ -84,6 +84,36 @@ const netlifyAPI = {
     return this._postJSON('/.netlify/functions/news-leads', criteria);
   },
 
+  async apolloCompanySearch(keywords, opts = {}) {
+    return this._postJSON('/.netlify/functions/apollo-company-search', {
+      keywords,
+      page: opts.page ?? 1,
+      perPage: opts.perPage ?? 25,
+      scoringProfile: opts.scoringProfile ?? 'cybersecurity',
+    });
+  },
+
+  async apolloPeopleSearch(titles, domains = [], opts = {}) {
+    return this._postJSON('/.netlify/functions/apollo-people-search', {
+      titles,
+      domains,
+      page: opts.page ?? 1,
+      perPage: opts.perPage ?? 25,
+      scoringProfile: opts.scoringProfile ?? 'cybersecurity',
+    });
+  },
+
+  async apolloPersonEnrich(params = {}) {
+    return this._postJSON('/.netlify/functions/apollo-person-enrich', {
+      firstName: params.firstName,
+      lastName: params.lastName,
+      organizationName: params.organizationName,
+      linkedinUrl: params.linkedinUrl,
+      email: params.email,
+      scoringProfile: params.scoringProfile ?? 'cybersecurity',
+    });
+  },
+
   async analyzeTech(domain) {
     return this._postJSON('/.netlify/functions/enrich-company', { domain });
   },
@@ -184,6 +214,20 @@ const EnhancedLeadGenDashboard = () => {
   const [analysis, setAnalysis] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
+
+  // Apollo Prospector (keyword company search, title-based people search, person enrichment)
+  const [apolloProfile, setApolloProfile] = useState('cybersecurity');
+  const [apolloKeywordsInput, setApolloKeywordsInput] = useState('');
+  const [apolloTitlesInput, setApolloTitlesInput] = useState('');
+  const [apolloDomainsInput, setApolloDomainsInput] = useState('');
+  const [apolloEnrichInput, setApolloEnrichInput] = useState({
+    firstName: '', lastName: '', organizationName: '', linkedinUrl: '', email: ''
+  });
+  const [apolloCompanyResults, setApolloCompanyResults] = useState(null);
+  const [apolloPeopleResults, setApolloPeopleResults] = useState(null);
+  const [apolloEnrichResult, setApolloEnrichResult] = useState(null);
+  const [apolloLoading, setApolloLoading] = useState({ companies: false, people: false, enrich: false });
+  const [apolloError, setApolloError] = useState(null);
 
   // Signals filtering state
   const [signalFilter, setSignalFilter] = useState('all');
@@ -1115,6 +1159,75 @@ P.S. I noticed ${company.name} is using ${company.securityTools?.[0] || 'various
       setAnalysisError(e.message);
     } finally {
       setAnalysisLoading(false);
+    }
+  };
+
+  const splitTokens = (raw) =>
+    (raw || '')
+      .split(/[,\n]/)
+      .map(t => t.trim())
+      .filter(Boolean);
+
+  const runApolloCompanySearch = async () => {
+    const keywords = splitTokens(apolloKeywordsInput);
+    if (keywords.length === 0) {
+      setApolloError('Enter at least one keyword (comma-separated).');
+      return;
+    }
+    setApolloError(null);
+    setApolloLoading(prev => ({ ...prev, companies: true }));
+    try {
+      const result = await netlifyAPI.apolloCompanySearch(keywords, { scoringProfile: apolloProfile });
+      setApolloCompanyResults(result);
+      // Merge new leads into the main list so existing rendering picks them up
+      if (result?.leads?.length) {
+        setCompanies(prev => {
+          const existingIds = new Set(prev.map(c => c.id));
+          const novel = result.leads.filter(l => !existingIds.has(l.id));
+          return [...novel, ...prev];
+        });
+      }
+    } catch (e) {
+      setApolloError(e.message || 'Apollo company search failed');
+    } finally {
+      setApolloLoading(prev => ({ ...prev, companies: false }));
+    }
+  };
+
+  const runApolloPeopleSearch = async () => {
+    const titles = splitTokens(apolloTitlesInput);
+    if (titles.length === 0) {
+      setApolloError('Enter at least one job title (comma-separated).');
+      return;
+    }
+    const domains = splitTokens(apolloDomainsInput);
+    setApolloError(null);
+    setApolloLoading(prev => ({ ...prev, people: true }));
+    try {
+      const result = await netlifyAPI.apolloPeopleSearch(titles, domains, { scoringProfile: apolloProfile });
+      setApolloPeopleResults(result);
+    } catch (e) {
+      setApolloError(e.message || 'Apollo people search failed');
+    } finally {
+      setApolloLoading(prev => ({ ...prev, people: false }));
+    }
+  };
+
+  const runApolloPersonEnrich = async () => {
+    const { firstName, lastName, linkedinUrl, email } = apolloEnrichInput;
+    if (!firstName && !lastName && !linkedinUrl && !email) {
+      setApolloError('Provide at least one of: name, LinkedIn URL, or email.');
+      return;
+    }
+    setApolloError(null);
+    setApolloLoading(prev => ({ ...prev, enrich: true }));
+    try {
+      const result = await netlifyAPI.apolloPersonEnrich({ ...apolloEnrichInput, scoringProfile: apolloProfile });
+      setApolloEnrichResult(result);
+    } catch (e) {
+      setApolloError(e.message || 'Apollo person enrichment failed');
+    } finally {
+      setApolloLoading(prev => ({ ...prev, enrich: false }));
     }
   };
 
@@ -2106,6 +2219,206 @@ INP² Security Solutions`;
                   <Button size="sm" className="w-full">Monitor Events</Button>
                 </CardContent>
               </Card>
+            </div>
+
+            <div className="mt-6 p-4 bg-white border border-purple-200 rounded-lg">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <div>
+                  <h3 className="text-lg font-semibold text-purple-800">Apollo Prospector</h3>
+                  <p className="text-xs text-gray-600">Keyword company search, title-based people prospecting, and single-person enrichment.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-gray-700">Scoring profile</label>
+                  <select
+                    className="px-3 py-2 border rounded-md text-sm"
+                    value={apolloProfile}
+                    onChange={(e) => setApolloProfile(e.target.value)}
+                  >
+                    <option value="cybersecurity">Cybersecurity (APOLLO_API_KEY)</option>
+                    <option value="commodity_trading">Commodity Trading (APOLLO_LAMINAR_API_KEY)</option>
+                  </select>
+                </div>
+              </div>
+
+              {apolloError && (
+                <div className="mb-3 p-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded">
+                  {apolloError}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Card className="bg-white">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">Find Companies (keywords)</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    <p className="text-xs text-gray-600">
+                      Comma-separated keywords (e.g. <em>commodity trading, oil trading, midstream</em>).
+                    </p>
+                    <Textarea
+                      placeholder="commodity trading, oil trading, trade finance"
+                      value={apolloKeywordsInput}
+                      onChange={(e) => setApolloKeywordsInput(e.target.value)}
+                      className="text-sm"
+                      rows={2}
+                    />
+                    <Button
+                      size="sm"
+                      className="w-full"
+                      onClick={runApolloCompanySearch}
+                      disabled={apolloLoading.companies}
+                    >
+                      {apolloLoading.companies
+                        ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Searching...</>
+                        : 'Search Companies'}
+                    </Button>
+                    {apolloCompanyResults && (
+                      <div className="text-xs text-gray-700 mt-2">
+                        <Badge variant="outline" className="mr-2">{apolloCompanyResults.source}</Badge>
+                        {apolloCompanyResults.leads?.length || 0} companies added to lead list
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-white">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">Find People (titles + domains)</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    <p className="text-xs text-gray-600">Job titles (comma-separated):</p>
+                    <Textarea
+                      placeholder="CFO, Treasurer, Head of Trade Finance"
+                      value={apolloTitlesInput}
+                      onChange={(e) => setApolloTitlesInput(e.target.value)}
+                      className="text-sm"
+                      rows={2}
+                    />
+                    <p className="text-xs text-gray-600">Target domains (optional, comma-separated):</p>
+                    <Textarea
+                      placeholder="mercuria.com, vitol.com, gunvorgroup.com"
+                      value={apolloDomainsInput}
+                      onChange={(e) => setApolloDomainsInput(e.target.value)}
+                      className="text-sm"
+                      rows={2}
+                    />
+                    <Button
+                      size="sm"
+                      className="w-full"
+                      onClick={runApolloPeopleSearch}
+                      disabled={apolloLoading.people}
+                    >
+                      {apolloLoading.people
+                        ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Searching...</>
+                        : 'Search People'}
+                    </Button>
+                    {apolloPeopleResults && (
+                      <div className="mt-2">
+                        <div className="text-xs text-gray-700 mb-2">
+                          <Badge variant="outline" className="mr-2">{apolloPeopleResults.source}</Badge>
+                          {apolloPeopleResults.people?.length || 0} people found
+                        </div>
+                        <div className="max-h-64 overflow-y-auto space-y-2">
+                          {(apolloPeopleResults.people || []).map((p, i) => (
+                            <div key={i} className="p-2 bg-gray-50 border rounded">
+                              <div className="flex items-center justify-between">
+                                <div className="text-sm font-medium">{p.name || 'Unknown'}</div>
+                                <Badge variant={p.score >= 80 ? 'default' : 'secondary'}>
+                                  {p.score} ({p.priority})
+                                </Badge>
+                              </div>
+                              <div className="text-xs text-gray-600">
+                                {p.title} {p.company ? `· ${p.company}` : ''}
+                              </div>
+                              {p.email && <div className="text-xs text-blue-700 truncate">{p.email}</div>}
+                              {p.scoreReasons?.length > 0 && (
+                                <ul className="text-xs text-gray-500 list-disc ml-4 mt-1">
+                                  {p.scoreReasons.map((r, j) => <li key={j}>{r}</li>)}
+                                </ul>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-white">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">Enrich a Person</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    <Input
+                      placeholder="First name"
+                      className="text-sm"
+                      value={apolloEnrichInput.firstName}
+                      onChange={(e) => setApolloEnrichInput(prev => ({ ...prev, firstName: e.target.value }))}
+                    />
+                    <Input
+                      placeholder="Last name"
+                      className="text-sm"
+                      value={apolloEnrichInput.lastName}
+                      onChange={(e) => setApolloEnrichInput(prev => ({ ...prev, lastName: e.target.value }))}
+                    />
+                    <Input
+                      placeholder="Organization name"
+                      className="text-sm"
+                      value={apolloEnrichInput.organizationName}
+                      onChange={(e) => setApolloEnrichInput(prev => ({ ...prev, organizationName: e.target.value }))}
+                    />
+                    <Input
+                      placeholder="LinkedIn URL"
+                      className="text-sm"
+                      value={apolloEnrichInput.linkedinUrl}
+                      onChange={(e) => setApolloEnrichInput(prev => ({ ...prev, linkedinUrl: e.target.value }))}
+                    />
+                    <Input
+                      placeholder="Email"
+                      className="text-sm"
+                      value={apolloEnrichInput.email}
+                      onChange={(e) => setApolloEnrichInput(prev => ({ ...prev, email: e.target.value }))}
+                    />
+                    <Button
+                      size="sm"
+                      className="w-full"
+                      onClick={runApolloPersonEnrich}
+                      disabled={apolloLoading.enrich}
+                    >
+                      {apolloLoading.enrich
+                        ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Enriching...</>
+                        : 'Enrich Person'}
+                    </Button>
+                    {apolloEnrichResult?.person && (
+                      <div className="mt-2 p-2 bg-gray-50 border rounded">
+                        <div className="flex items-center justify-between">
+                          <div className="text-sm font-medium">{apolloEnrichResult.person.name}</div>
+                          <Badge variant={apolloEnrichResult.person.score >= 80 ? 'default' : 'secondary'}>
+                            {apolloEnrichResult.person.score} ({apolloEnrichResult.person.priority})
+                          </Badge>
+                        </div>
+                        <div className="text-xs text-gray-600">
+                          {apolloEnrichResult.person.title} {apolloEnrichResult.person.company ? `· ${apolloEnrichResult.person.company}` : ''}
+                        </div>
+                        {apolloEnrichResult.person.email && (
+                          <div className="text-xs text-blue-700">{apolloEnrichResult.person.email}</div>
+                        )}
+                        {apolloEnrichResult.person.linkedin && (
+                          <a
+                            href={apolloEnrichResult.person.linkedin}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-blue-600 underline"
+                          >
+                            LinkedIn
+                          </a>
+                        )}
+                        <Badge variant="outline" className="mt-1">{apolloEnrichResult.source}</Badge>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
             </div>
 
             <div className="mt-6 p-4 bg-blue-50 rounded-lg">
