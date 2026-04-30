@@ -8,6 +8,7 @@ import {
   logProviderEvent,
   requireLiveDataEnabled
 } from '../lib/source.js';
+import { keywordsForSegment, mergeWithDefaults } from '../lib/laminarSignalHints.js';
 
 const PROCUREMENT_KEYWORDS = [
   'trade finance',
@@ -50,17 +51,19 @@ export async function handler(event) {
   }
 
   try {
-    const { domain, company, industry } = JSON.parse(event.body || '{}');
+    const { domain, company, industry, segment = null } = JSON.parse(event.body || '{}');
 
-    const cacheKey = getCacheKey(domain || company || industry || 'rfp', 'search', { industry, company });
+    const effectiveKeywords = mergeWithDefaults(keywordsForSegment(segment), PROCUREMENT_KEYWORDS);
+
+    const cacheKey = getCacheKey(domain || company || industry || 'rfp', 'search', { industry, company, segment });
     const cached = get(cacheKey);
     if (cached) {
       return jsonResponse(cached);
     }
 
-    const liveResult = await searchLiveRfps(company, industry);
+    const liveResult = await searchLiveRfps(company, industry, effectiveKeywords);
     if (liveResult) {
-      const response = successResponse(liveResult.data, liveResult.meta);
+      const response = successResponse({ ...liveResult.data, segment }, liveResult.meta);
       set(cacheKey, JSON.parse(response.body), 8 * 60 * 60 * 1000);
       return response;
     }
@@ -74,7 +77,7 @@ export async function handler(event) {
     }
 
     const signals = attachSignalMeta(
-      await huntFallbackRfps(domain, company, industry),
+      await huntFallbackRfps(domain, company, industry, effectiveKeywords),
       {
         source: 'provider_fallback',
         provider: 'rfp_scrape',
@@ -83,7 +86,7 @@ export async function handler(event) {
     );
 
     const response = successResponse(
-      { signals },
+      { signals, segment },
       {
         source: 'provider_fallback',
         provider: 'rfp_scrape',
@@ -103,7 +106,7 @@ export async function handler(event) {
   }
 }
 
-async function searchLiveRfps(company, industry) {
+async function searchLiveRfps(company, industry, keywords = PROCUREMENT_KEYWORDS) {
   if (!process.env.SAM_GOV_API_KEY) {
     return null;
   }
@@ -112,7 +115,7 @@ async function searchLiveRfps(company, industry) {
   const startedAt = Date.now();
 
   try {
-    const opportunities = await fetchSamGovOpportunities(company, industry);
+    const opportunities = await fetchSamGovOpportunities(company, industry, keywords);
     const rawSignals = opportunities.map((opportunity) => opportunityToSignal(opportunity)).filter(Boolean);
     const signals = attachSignalMeta(rawSignals, {
       source: 'provider_live',
@@ -165,20 +168,17 @@ async function searchLiveRfps(company, industry) {
   }
 }
 
-async function fetchSamGovOpportunities(company, industry) {
+async function fetchSamGovOpportunities(company, industry, keywords = PROCUREMENT_KEYWORDS) {
   const postedTo = new Date();
   const postedFrom = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
   const formattedFrom = formatSamDate(postedFrom);
   const formattedTo = formatSamDate(postedTo);
 
-  const searchTerms = [
+  const baseSearchTerms = [
     industry === 'Finance' ? 'trade finance' : null,
-    company ? `${company} settlement` : null,
-    'trade finance',
-    'settlement',
-    'treasury',
-    'payments'
+    company ? `${company} settlement` : null
   ].filter(Boolean);
+  const searchTerms = [...baseSearchTerms, ...keywords.slice(0, 4)];
 
   const results = [];
   for (const term of searchTerms.slice(0, 3)) {
@@ -191,7 +191,7 @@ async function fetchSamGovOpportunities(company, industry) {
 
   const unique = new Map();
   for (const opportunity of results) {
-    if (matchesProcurementFocus(opportunity) && !unique.has(opportunity.noticeId)) {
+    if (matchesProcurementFocus(opportunity, keywords) && !unique.has(opportunity.noticeId)) {
       unique.set(opportunity.noticeId, opportunity);
     }
   }
@@ -206,9 +206,9 @@ function formatSamDate(date) {
   return `${month}/${day}/${year}`;
 }
 
-function matchesProcurementFocus(opportunity = {}) {
+function matchesProcurementFocus(opportunity = {}, keywords = PROCUREMENT_KEYWORDS) {
   const text = `${opportunity.title || ''} ${opportunity.description || ''}`.toLowerCase();
-  return PROCUREMENT_KEYWORDS.some((keyword) => text.includes(keyword));
+  return keywords.some((keyword) => text.includes(keyword));
 }
 
 function opportunityToSignal(opportunity) {
@@ -252,11 +252,11 @@ function extractResponseDate(opportunity = {}) {
   return null;
 }
 
-async function huntFallbackRfps(domain, company, industry) {
+async function huntFallbackRfps(domain, company, industry, keywords = PROCUREMENT_KEYWORDS) {
   const signals = [];
 
   try {
-    const companySignals = await checkCompanyProcurementPages(domain);
+    const companySignals = await checkCompanyProcurementPages(domain, keywords);
     signals.push(...companySignals);
 
     const industrySignals = generateIndustryFallback(industry);
@@ -271,7 +271,7 @@ async function huntFallbackRfps(domain, company, industry) {
   return signals;
 }
 
-async function checkCompanyProcurementPages(domain) {
+async function checkCompanyProcurementPages(domain, keywords = PROCUREMENT_KEYWORDS) {
   if (!domain) {
     return [];
   }
@@ -298,7 +298,7 @@ async function checkCompanyProcurementPages(domain) {
 
       if (response.ok) {
         const html = await response.text();
-        signals.push(...parseRfpContent(html, url));
+        signals.push(...parseRfpContent(html, url, keywords));
       }
     } catch {
       continue;
@@ -308,11 +308,11 @@ async function checkCompanyProcurementPages(domain) {
   return signals;
 }
 
-function parseRfpContent(html, sourceUrl) {
+function parseRfpContent(html, sourceUrl, keywords = PROCUREMENT_KEYWORDS) {
   const lowerHtml = html.toLowerCase();
   const hasRfpLanguage = ['request for proposal', 'rfp', 'rfq', 'vendor selection', 'solicitation']
     .some((indicator) => lowerHtml.includes(indicator));
-  const focusHits = PROCUREMENT_KEYWORDS.filter((keyword) => lowerHtml.includes(keyword));
+  const focusHits = keywords.filter((keyword) => lowerHtml.includes(keyword));
 
   if (!hasRfpLanguage || focusHits.length === 0) {
     return [];

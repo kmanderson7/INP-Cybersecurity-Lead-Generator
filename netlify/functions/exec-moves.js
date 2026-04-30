@@ -8,6 +8,7 @@ import {
   logProviderEvent,
   requireLiveDataEnabled
 } from '../lib/source.js';
+import { titlesForSegment, mergeWithDefaults } from '../lib/laminarSignalHints.js';
 
 const FINANCE_TITLES = [
   'CFO',
@@ -57,7 +58,7 @@ export async function handler(event) {
   }
 
   try {
-    const { domain, company } = JSON.parse(event.body || '{}');
+    const { domain, company, segment = null } = JSON.parse(event.body || '{}');
     if (!domain && !company) {
       return errorResponse('Domain or company is required', 400, {
         source: 'provider_fallback',
@@ -65,15 +66,17 @@ export async function handler(event) {
       });
     }
 
-    const cacheKey = getCacheKey(domain || company, 'exec_moves', { company });
+    const effectiveTitles = mergeWithDefaults(titlesForSegment(segment), FINANCE_TITLES);
+
+    const cacheKey = getCacheKey(domain || company, 'exec_moves', { company, segment });
     const cached = get(cacheKey);
     if (cached) {
       return jsonResponse(cached);
     }
 
-    const liveResult = await tryLiveExecutiveMoves(domain, company);
+    const liveResult = await tryLiveExecutiveMoves(domain, company, effectiveTitles);
     if (liveResult) {
-      const response = successResponse(liveResult.data, liveResult.meta);
+      const response = successResponse({ ...liveResult.data, segment }, liveResult.meta);
       set(cacheKey, JSON.parse(response.body), 6 * 60 * 60 * 1000);
       return response;
     }
@@ -86,14 +89,15 @@ export async function handler(event) {
       });
     }
 
-    const fallbackSignals = attachSignalMeta(await detectExecutiveMoves(domain, company), {
+    const fallbackSignals = attachSignalMeta(await detectExecutiveMoves(domain, company, effectiveTitles), {
       source: 'provider_fallback',
       provider: 'company_news_scrape',
       confidence: 0.56
     });
 
     const response = successResponse({
-      signals: fallbackSignals
+      signals: fallbackSignals,
+      segment
     }, {
       source: 'provider_fallback',
       provider: 'company_news_scrape',
@@ -112,15 +116,15 @@ export async function handler(event) {
   }
 }
 
-async function tryLiveExecutiveMoves(domain, company) {
+async function tryLiveExecutiveMoves(domain, company, titles) {
   const liveProviders = [];
 
   if (process.env.NEWS_API_KEY) {
-    liveProviders.push(() => searchNewsApi(company || domain));
+    liveProviders.push(() => searchNewsApi(company || domain, titles));
   }
 
   if (process.env.SERPAPI_API_KEY) {
-    liveProviders.push(() => searchSerpApi(company || domain));
+    liveProviders.push(() => searchSerpApi(company || domain, titles));
   }
 
   for (const providerCall of liveProviders) {
@@ -133,12 +137,12 @@ async function tryLiveExecutiveMoves(domain, company) {
   return null;
 }
 
-async function searchNewsApi(target) {
+async function searchNewsApi(target, titles = FINANCE_TITLES) {
   const startedAt = Date.now();
   const correlationId = randomUUID();
 
   try {
-    const query = buildExecutiveMoveQuery(target);
+    const query = buildExecutiveMoveQuery(target, titles);
     const fromDate = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&language=en&sortBy=publishedAt&pageSize=10&from=${fromDate}`;
     const response = await fetchWithRetry(url, {
@@ -150,7 +154,7 @@ async function searchNewsApi(target) {
     const payload = await response.json();
     const articles = Array.isArray(payload.articles) ? payload.articles : [];
     const rawSignals = articles
-      .map((article) => articleToExecutiveSignal(article))
+      .map((article) => articleToExecutiveSignal(article, titles))
       .filter(Boolean);
     const signals = attachSignalMeta(rawSignals, {
       source: 'provider_live',
@@ -196,12 +200,12 @@ async function searchNewsApi(target) {
   }
 }
 
-async function searchSerpApi(target) {
+async function searchSerpApi(target, titles = FINANCE_TITLES) {
   const startedAt = Date.now();
   const correlationId = randomUUID();
 
   try {
-    const query = buildExecutiveMoveQuery(target);
+    const query = buildExecutiveMoveQuery(target, titles);
     const url = `https://serpapi.com/search.json?engine=google_news&q=${encodeURIComponent(query)}&api_key=${encodeURIComponent(process.env.SERPAPI_API_KEY)}&hl=en&gl=us`;
     const response = await fetchWithRetry(url, {}, 2, 10000);
     const payload = await response.json();
@@ -213,7 +217,7 @@ async function searchSerpApi(target) {
         url: article.link,
         publishedAt: article.date,
         source: { name: article.source?.name || 'Google News' }
-      }))
+      }, titles))
       .filter(Boolean);
     const signals = attachSignalMeta(rawSignals, {
       source: 'provider_live',
@@ -259,18 +263,18 @@ async function searchSerpApi(target) {
   }
 }
 
-function buildExecutiveMoveQuery(target) {
-  return `"${target}" AND (${FINANCE_TITLES.map((title) => `"${title}"`).join(' OR ')}) AND (${MOVE_KEYWORDS.join(' OR ')})`;
+function buildExecutiveMoveQuery(target, titles = FINANCE_TITLES) {
+  return `"${target}" AND (${titles.map((title) => `"${title}"`).join(' OR ')}) AND (${MOVE_KEYWORDS.join(' OR ')})`;
 }
 
-function articleToExecutiveSignal(article) {
+function articleToExecutiveSignal(article, titles = FINANCE_TITLES) {
   const text = `${article?.title || ''} ${article?.description || ''}`.trim();
   if (!text) {
     return null;
   }
 
   const normalized = text.toLowerCase();
-  const hasIncludedTitle = FINANCE_TITLES.some((title) => normalized.includes(title.toLowerCase()));
+  const hasIncludedTitle = titles.some((title) => normalized.includes(title.toLowerCase()));
   const hasMoveKeyword = MOVE_KEYWORDS.some((keyword) => normalized.includes(keyword));
   const hasExcludedOnly = EXCLUDED_TERMS.some((term) => normalized.includes(term)) && !hasIncludedTitle;
 
@@ -302,11 +306,11 @@ function normalizePublishedAt(value) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
-async function detectExecutiveMoves(domain, company) {
+async function detectExecutiveMoves(domain, company, titles = FINANCE_TITLES) {
   const signals = [];
 
   try {
-    const newsSignals = await checkCompanyNews(domain, company);
+    const newsSignals = await checkCompanyNews(domain, company, titles);
     signals.push(...newsSignals);
 
     const heuristicSignals = simulateLeadershipMonitoring(company);
@@ -318,7 +322,7 @@ async function detectExecutiveMoves(domain, company) {
   return signals;
 }
 
-async function checkCompanyNews(domain, company) {
+async function checkCompanyNews(domain, company, titles = FINANCE_TITLES) {
   const signals = [];
   const newsUrls = [
     `https://${domain}/news`,
@@ -337,7 +341,7 @@ async function checkCompanyNews(domain, company) {
 
       if (response.ok) {
         const html = await response.text();
-        const parsedSignals = parseNewsForExecMoves(html, url, company);
+        const parsedSignals = parseNewsForExecMoves(html, url, company, titles);
         signals.push(...parsedSignals);
       }
     } catch {
@@ -348,11 +352,11 @@ async function checkCompanyNews(domain, company) {
   return signals;
 }
 
-function parseNewsForExecMoves(html, sourceUrl, company) {
+function parseNewsForExecMoves(html, sourceUrl, company, titles = FINANCE_TITLES) {
   const signals = [];
   const lowerHtml = html.toLowerCase();
 
-  for (const title of FINANCE_TITLES) {
+  for (const title of titles) {
     const hasTitle = lowerHtml.includes(title.toLowerCase());
     const hasMove = MOVE_KEYWORDS.some((keyword) => lowerHtml.includes(keyword));
 

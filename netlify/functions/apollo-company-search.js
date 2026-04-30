@@ -2,8 +2,20 @@ import { jsonResponse, errorResponse, fetchWithRetry } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
 import { get, set, getCacheKey } from '../lib/cache.js';
 import { calculateScore, SCORING_PROFILES } from '../lib/normalize.js';
+import { LAMINAR_SEGMENTS, LAMINAR_SEGMENT_ORDER } from '../lib/laminarPilot.js';
 
 const APOLLO_BASE_URL = 'https://api.apollo.io/api/v1';
+
+function inferSegmentFromDomain(domain) {
+  if (!domain) return null;
+  const lower = String(domain).toLowerCase();
+  for (const id of LAMINAR_SEGMENT_ORDER) {
+    if (LAMINAR_SEGMENTS[id].domains.some((d) => lower.includes(d.replace(/\.com$/, '')))) {
+      return id;
+    }
+  }
+  return null;
+}
 
 export async function handler(event) {
   if (event.httpMethod === 'OPTIONS') {
@@ -144,6 +156,10 @@ function transformOrganization(org, idx, profile) {
 
   const scoring = calculateScore(baseScore, signals, 5, 0);
 
+  const segment = profile === 'commodity_trading'
+    ? inferSegmentFromDomain(org.primary_domain)
+    : null;
+
   return {
     id: `apollo_co_${org.id || idx}`,
     name: org.name || 'Unknown Company',
@@ -172,7 +188,8 @@ function transformOrganization(org, idx, profile) {
       funding: org.total_funding ? `$${Math.round(org.total_funding / 1_000_000)}M total raised` : null
     },
     explainScore: scoring.explainScore,
-    profile
+    profile,
+    segment
   };
 }
 

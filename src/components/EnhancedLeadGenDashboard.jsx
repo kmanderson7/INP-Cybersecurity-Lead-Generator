@@ -16,7 +16,16 @@ import { loadLeadState, saveLeadState } from '@/lib/storage/leadStore';
 import { loadSegmentState, saveSegmentState } from '@/lib/storage/segmentStore';
 import { loadSequenceState, saveSequenceState } from '@/lib/storage/sequenceStore';
 import { loadOutreachState, saveOutreachState } from '@/lib/storage/outreachStore';
+import { loadLaminarState, saveLaminarState } from '@/lib/storage/laminarStore';
 import { qualifyTradeFinanceContacts } from '../../netlify/lib/tradeFinanceContacts.js';
+import {
+  LAMINAR_PILOT_PROFILE,
+  LAMINAR_SEGMENTS,
+  LAMINAR_SEGMENT_ORDER,
+  getAllLaminarTitles,
+  getAllLaminarDomains,
+  inferContactSegment
+} from '../../netlify/lib/laminarPilot.js';
 import ExecutiveDashboard from './ExecutiveDashboard';
 import CalendarScheduler from './CalendarScheduler';
 import BulkEmail from './BulkEmail';
@@ -24,7 +33,7 @@ import Analytics from './Analytics';
 import {
   Search, Star, TrendingUp, Mail, Phone, Globe, AlertCircle, Shield,
   DollarSign, Users, Calendar, Filter, Loader2, Crown, List, AlertTriangle,
-  Clock, Brain, Target, Eye, Save, CheckCircle2
+  Clock, Brain, Target, Eye, Save, CheckCircle2, Briefcase
 } from 'lucide-react';
 
 /* ---------------- Error Boundary Component ---------------- */
@@ -263,6 +272,11 @@ const EnhancedLeadGenDashboard = () => {
   const [apolloEnrichResult, setApolloEnrichResult] = useState(null);
   const [apolloLoading, setApolloLoading] = useState({ companies: false, people: false, enrich: false });
   const [apolloError, setApolloError] = useState(null);
+
+  // Laminar Pilot state
+  const [contactsTabSegment, setContactsTabSegment] = useState('all');
+  const [pilotViewSegment, setPilotViewSegment] = useState(null);
+  const [prospectorSegment, setProspectorSegment] = useState(null);
 
   // Signals filtering state
   const [signalFilter, setSignalFilter] = useState('all');
@@ -1190,13 +1204,38 @@ const EnhancedLeadGenDashboard = () => {
     return 'Contact';
   };
 
-  const groupContactsByRole = (company) => {
-    const contacts = getSortedContacts(company);
+  const getSegmentForContact = (contact) => {
+    if (!contact) return null;
+    if (contact.segment) return contact.segment;
+    if (contact.sourceMeta?.segment) return contact.sourceMeta.segment;
+    try {
+      return inferContactSegment(contact);
+    } catch {
+      return null;
+    }
+  };
+
+  const groupContactsByRole = (company, segmentFilter = 'all') => {
+    let contacts = getSortedContacts(company);
+    if (segmentFilter && segmentFilter !== 'all') {
+      contacts = contacts.filter((contact) => getSegmentForContact(contact) === segmentFilter);
+    }
     return [
       { key: 'decision_maker', label: 'Decision Makers', contacts: contacts.filter((contact) => contact.roleCategory === 'decision_maker') },
       { key: 'operator', label: 'Operators', contacts: contacts.filter((contact) => contact.roleCategory === 'operator') },
       { key: 'influencer', label: 'Influencers', contacts: contacts.filter((contact) => contact.roleCategory === 'influencer') }
     ];
+  };
+
+  const getCompanySegmentCounts = (company) => {
+    const contacts = getSortedContacts(company);
+    const counts = new Map();
+    for (const contact of contacts) {
+      const seg = getSegmentForContact(contact);
+      if (!seg) continue;
+      counts.set(seg, (counts.get(seg) || 0) + 1);
+    }
+    return counts;
   };
 
   const generatePersonalizedEmail = (company, persona, tone) => {
@@ -2091,11 +2130,12 @@ INP² Security Solutions`;
 
     const hydrateState = async () => {
       try {
-        const [leadState, segmentState, sequenceState, outreachState, health] = await Promise.all([
+        const [leadState, segmentState, sequenceState, outreachState, laminarState, health] = await Promise.all([
           loadLeadState(),
           loadSegmentState(),
           loadSequenceState(),
           loadOutreachState(),
+          loadLaminarState(),
           netlifyAPI.getIntegrationHealth().catch(() => null)
         ]);
 
@@ -2118,6 +2158,11 @@ INP² Security Solutions`;
         setLastEmailResult(leadState?.lastEmailResult || null);
         setIntegrationHealth(health?.providers || []);
         setApiConnected(storedCompanies.length > 0);
+        if (laminarState) {
+          if (laminarState.contactsTabSegment) setContactsTabSegment(laminarState.contactsTabSegment);
+          if (laminarState.pilotViewSegment !== undefined) setPilotViewSegment(laminarState.pilotViewSegment);
+          if (laminarState.prospectorSegment !== undefined) setProspectorSegment(laminarState.prospectorSegment);
+        }
       } catch (error) {
         console.error('Failed to hydrate persisted state:', error);
         const mockData = generateMockLeads();
@@ -2184,6 +2229,20 @@ INP² Security Solutions`;
       console.error('Failed to persist outreach state:', error);
     });
   }, [savedOutreachTemplates, variantsByCompany, companies, storageHydrated]);
+
+  useEffect(() => {
+    if (!storageHydrated) {
+      return;
+    }
+
+    saveLaminarState({
+      contactsTabSegment,
+      pilotViewSegment,
+      prospectorSegment
+    }).catch((error) => {
+      console.error('Failed to persist laminar state:', error);
+    });
+  }, [contactsTabSegment, pilotViewSegment, prospectorSegment, storageHydrated]);
 
   const getScoreColor = (score) => {
     if (score >= 80) return 'bg-green-500';
@@ -2284,6 +2343,15 @@ INP² Security Solutions`;
             >
               <Calendar className="w-4 h-4" />
               Pipeline
+            </Button>
+            <Button
+              variant={currentView === 'laminar' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setCurrentView('laminar')}
+              className="flex items-center gap-2"
+            >
+              <Briefcase className="w-4 h-4" />
+              Laminar Pilot
             </Button>
           </div>
 
@@ -2649,6 +2717,40 @@ INP² Security Solutions`;
                     <CardTitle className="text-base">Find People (titles + domains)</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-2">
+                    {apolloProfile === 'commodity_trading' && (
+                      <div className="rounded border border-purple-200 bg-purple-50 p-2 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs font-medium text-purple-900">Laminar segment:</label>
+                          <select
+                            className="flex-1 px-2 py-1 border rounded text-xs"
+                            value={prospectorSegment || ''}
+                            onChange={(e) => setProspectorSegment(e.target.value || null)}
+                          >
+                            <option value="">All segments</option>
+                            {LAMINAR_SEGMENT_ORDER.map((segId) => (
+                              <option key={segId} value={segId}>{LAMINAR_SEGMENTS[segId].label}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="w-full text-xs"
+                          onClick={() => {
+                            const titles = prospectorSegment
+                              ? LAMINAR_SEGMENTS[prospectorSegment].titles
+                              : getAllLaminarTitles();
+                            const domains = prospectorSegment
+                              ? LAMINAR_SEGMENTS[prospectorSegment].domains
+                              : getAllLaminarDomains();
+                            setApolloTitlesInput(titles.join(', '));
+                            setApolloDomainsInput(domains.join(', '));
+                          }}
+                        >
+                          Load Laminar titles + domains
+                        </Button>
+                      </div>
+                    )}
                     <p className="text-xs text-gray-600">Job titles (comma-separated):</p>
                     <Textarea
                       placeholder="CFO, Treasurer, Head of Trade Finance"
@@ -3135,6 +3237,70 @@ INP² Security Solutions`;
             ))}
           </div>
         </div>
+      ) : currentView === 'laminar' ? (
+        /* Laminar Pilot View — 4-column segment board across all loaded companies */
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">Laminar Pilot — Commodity Trading Segments</h3>
+            <p className="text-sm text-gray-600">Qualified contacts from {filteredCompanies.length} {filteredCompanies.length === 1 ? 'company' : 'companies'}, grouped by pilot segment. Click a contact to open the company detail.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {LAMINAR_SEGMENT_ORDER.map((segId) => {
+              const segment = LAMINAR_SEGMENTS[segId];
+              const segmentContacts = filteredCompanies.flatMap((company) =>
+                getSortedContacts(company)
+                  .filter((c) => getSegmentForContact(c) === segId)
+                  .map((c) => ({ ...c, _company: company }))
+              ).sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
+
+              return (
+                <div key={segId} className="bg-gray-50 rounded-lg p-4 min-h-[600px] border border-gray-200">
+                  <div className="mb-3 flex items-center justify-between">
+                    <h4 className="font-semibold text-gray-800">{segment.label}</h4>
+                    <Badge variant="outline" className="text-xs">{segmentContacts.length}</Badge>
+                  </div>
+                  <p className="text-xs text-gray-500 mb-3">{segment.description}</p>
+                  {segmentContacts.length === 0 ? (
+                    <div className="text-xs text-gray-400 italic">
+                      No qualified contacts yet. Use Apollo Prospector with the {segment.label} segment to find prospects.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {segmentContacts.map((contact, i) => (
+                        <button
+                          key={`${segId}-${contact._company.id}-${i}`}
+                          type="button"
+                          onClick={() => {
+                            setSelectedCompany(contact._company);
+                            setCurrentView('detailed');
+                          }}
+                          className="w-full text-left p-2 bg-white border border-gray-200 rounded hover:border-blue-400 hover:shadow-sm transition"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-medium truncate">{contact.name || 'Unknown'}</div>
+                              <div className="text-xs text-gray-600 truncate">{contact.title}</div>
+                              <div className="text-xs text-gray-500 truncate">{contact._company.name}</div>
+                              {contact.email && (
+                                <div className="text-xs text-blue-600 truncate">{contact.email}</div>
+                              )}
+                            </div>
+                            <Badge variant={(contact.relevanceScore || 0) >= 80 ? 'default' : 'secondary'} className="text-xs shrink-0">
+                              {contact.relevanceScore || 0}
+                            </Badge>
+                          </div>
+                          <div className="mt-1 text-[10px] text-gray-500">
+                            {getRoleCategoryLabel(contact.roleCategory)}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       ) : (
         /* Detailed View */
         filteredCompanies.length > 0 && (
@@ -3550,44 +3716,88 @@ INP² Security Solutions`;
                         <CardTitle>Key Contacts</CardTitle>
                       </CardHeader>
                       <CardContent>
-                        <div className="space-y-6">
-                          {groupContactsByRole(selectedCompany).map((group) => (
-                            group.contacts.length > 0 ? (
-                              <div key={group.key}>
-                                <h4 className="mb-3 text-sm font-semibold text-gray-700">{group.label}</h4>
-                                <div className="space-y-4">
-                                  {group.contacts.map((exec, i) => (
-                                    <div key={`${group.key}-${i}`} className="flex justify-between items-center p-3 border rounded-lg">
-                                      <div>
-                                        <div className="flex items-center gap-2">
-                                          <h4 className="font-semibold">{exec.name}</h4>
-                                          <Badge variant="outline">
-                                            {getRoleCategoryLabel(exec.roleCategory)}
-                                          </Badge>
-                                        </div>
-                                        <p className="text-sm text-gray-600">{exec.title}</p>
-                                        <p className="text-sm text-blue-600">{exec.email || 'No verified email'}</p>
-                                        <p className="text-xs text-gray-500">
-                                          Relevance {exec.relevanceScore || 0}
-                                          {exec.department ? ` • ${exec.department}` : ''}
-                                          {exec.seniority ? ` • ${exec.seniority}` : ''}
-                                        </p>
-                                      </div>
-                                      <div className="flex gap-2">
-                                        <Button size="sm" variant="outline">
-                                          <Mail className="w-4 h-4" />
-                                        </Button>
-                                        <Button size="sm" variant="outline">
-                                          <Globe className="w-4 h-4" />
-                                        </Button>
-                                      </div>
-                                    </div>
+                        {(() => {
+                          const segmentCounts = getCompanySegmentCounts(selectedCompany);
+                          const presentSegments = LAMINAR_SEGMENT_ORDER.filter((id) => segmentCounts.has(id));
+                          const totalSegmented = Array.from(segmentCounts.values()).reduce((sum, n) => sum + n, 0);
+                          const groups = groupContactsByRole(selectedCompany, contactsTabSegment);
+                          const totalInFilter = groups.reduce((sum, g) => sum + g.contacts.length, 0);
+                          return (
+                            <>
+                              {presentSegments.length > 0 && (
+                                <div className="flex flex-wrap items-center gap-2 mb-4">
+                                  <span className="text-xs font-medium text-gray-500">Segment:</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setContactsTabSegment('all')}
+                                    className={`px-2.5 py-1 text-xs rounded-full border transition ${contactsTabSegment === 'all' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                                  >
+                                    All ({totalSegmented})
+                                  </button>
+                                  {presentSegments.map((segId) => (
+                                    <button
+                                      key={segId}
+                                      type="button"
+                                      onClick={() => setContactsTabSegment(segId)}
+                                      className={`px-2.5 py-1 text-xs rounded-full border transition ${contactsTabSegment === segId ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                                    >
+                                      {LAMINAR_SEGMENTS[segId].label} ({segmentCounts.get(segId)})
+                                    </button>
                                   ))}
                                 </div>
-                              </div>
-                            ) : null
-                          ))}
-                        </div>
+                              )}
+                              {totalInFilter === 0 && contactsTabSegment !== 'all' ? (
+                                <p className="text-sm text-gray-500 italic">
+                                  No contacts in segment "{LAMINAR_SEGMENTS[contactsTabSegment]?.label || contactsTabSegment}" for {selectedCompany.name}.
+                                </p>
+                              ) : (
+                                <div className="space-y-6">
+                                  {groups.map((group) => (
+                                    group.contacts.length > 0 ? (
+                                      <div key={group.key}>
+                                        <h4 className="mb-3 text-sm font-semibold text-gray-700">{group.label}</h4>
+                                        <div className="space-y-4">
+                                          {group.contacts.map((exec, i) => (
+                                            <div key={`${group.key}-${i}`} className="flex justify-between items-center p-3 border rounded-lg">
+                                              <div>
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                  <h4 className="font-semibold">{exec.name}</h4>
+                                                  <Badge variant="outline">
+                                                    {getRoleCategoryLabel(exec.roleCategory)}
+                                                  </Badge>
+                                                  {getSegmentForContact(exec) && (
+                                                    <Badge variant="secondary" className="text-xs">
+                                                      {LAMINAR_SEGMENTS[getSegmentForContact(exec)]?.label || getSegmentForContact(exec)}
+                                                    </Badge>
+                                                  )}
+                                                </div>
+                                                <p className="text-sm text-gray-600">{exec.title}</p>
+                                                <p className="text-sm text-blue-600">{exec.email || 'No verified email'}</p>
+                                                <p className="text-xs text-gray-500">
+                                                  Relevance {exec.relevanceScore || 0}
+                                                  {exec.department ? ` • ${exec.department}` : ''}
+                                                  {exec.seniority ? ` • ${exec.seniority}` : ''}
+                                                </p>
+                                              </div>
+                                              <div className="flex gap-2">
+                                                <Button size="sm" variant="outline">
+                                                  <Mail className="w-4 h-4" />
+                                                </Button>
+                                                <Button size="sm" variant="outline">
+                                                  <Globe className="w-4 h-4" />
+                                                </Button>
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ) : null
+                                  ))}
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
                       </CardContent>
                     </Card>
                   </TabsContent>
