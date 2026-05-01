@@ -1,4 +1,4 @@
-import { jsonResponse, errorResponse, successResponse } from '../lib/http.js';
+import { errorResponse, successResponse } from '../lib/http.js';
 import { checkRateLimit } from '../lib/rateLimit.js';
 import { requireLiveDataEnabled } from '../lib/source.js';
 import OpenAI from 'openai';
@@ -169,7 +169,7 @@ Explain.`
 };
 
 function renderTemplate(tmpl, payload) {
-  return tmpl.replace(/\{\{(\w+)\}\}/g, (_, key) => {
+  return tmpl.replace(/\{\{?(\w+)\}\}?/g, (_, key) => {
     const v = payload?.[key];
     if (v === undefined || v === null || v === '') return 'n/a';
     return String(v);

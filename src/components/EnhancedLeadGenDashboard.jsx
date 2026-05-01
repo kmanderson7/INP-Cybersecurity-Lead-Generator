@@ -42,12 +42,13 @@ import {
 } from 'lucide-react';
 import {
   computeContactHeat,
+  computeWorkingCapital,
   computeSegmentMetrics,
+  getSegmentForContact as getLaminarSegmentForContact,
   getTopSignalForSegment,
   sortContactsBy,
   getCompanyWorkingCapital,
   formatCurrencyShort,
-  inferPillarReadiness,
   SEGMENT_ICONS
 } from '@/lib/laminarMetrics';
 
@@ -299,6 +300,9 @@ const EnhancedLeadGenDashboard = () => {
   const [sortBySegment, setSortBySegment] = useState({ energy_traders: 'heat', banks: 'heat', midstream: 'heat', inspection: 'heat' });
   const [refreshingSegments, setRefreshingSegments] = useState({});
   const [refreshAllProgress, setRefreshAllProgress] = useState(null);
+  const [detailTab, setDetailTab] = useState('overview');
+  const [calendarLead, setCalendarLead] = useState(null);
+  const [laminarOutreachContext, setLaminarOutreachContext] = useState(null);
 
   // Signals filtering state
   const [signalFilter, setSignalFilter] = useState('all');
@@ -510,20 +514,81 @@ const EnhancedLeadGenDashboard = () => {
     return Array.from(industries).sort();
   };
 
-  const openEmailModal = (company) => {
-    const executive = getPrimaryContact(company);
+  const isLaminarCompany = useCallback((company) => {
+    if (!company) return false;
+    if (company.segment) return true;
+    return (company.contacts || company.executives || []).some((contact) => Boolean(getSegmentForContact(contact)));
+  }, []);
+
+  const buildCalendarLead = useCallback((company, contact) => {
+    if (!company) return null;
+    const contacts = Array.isArray(company.contacts) ? company.contacts : [];
+    const primaryContact = contact || getPrimaryContact(company);
+    const remainingContacts = primaryContact
+      ? contacts.filter((entry) => entry !== primaryContact)
+      : contacts;
+
+    return {
+      ...company,
+      company: company.name,
+      contacts: primaryContact ? [primaryContact, ...remainingContacts] : contacts,
+      executives: primaryContact ? [primaryContact, ...remainingContacts] : contacts
+    };
+  }, []);
+
+  const buildLaminarEmailDraft = useCallback((company, contact) => {
+    const workingCapital = getCompanyWorkingCapital(company);
+    const signal = Array.isArray(company?.signals)
+      ? [...company.signals].sort((a, b) => (b.scoreImpact || 0) - (a.scoreImpact || 0))[0]
+      : null;
+    const occurredAt = signal?.occurredAt ? new Date(signal.occurredAt).getTime() : null;
+    const daysAgo = occurredAt && !Number.isNaN(occurredAt)
+      ? Math.max(0, Math.round((Date.now() - occurredAt) / (24 * 60 * 60 * 1000)))
+      : null;
+    const roleLabel = contact?.title || 'role';
+    const workingCapitalLine = workingCapital?.locked
+      ? `${formatCurrencyShort(workingCapital.locked)} sitting in your settlement pipeline right now.`
+      : 'Settlement timing is still tying up working capital between documents and release.';
+    const signalLine = signal?.details
+      ? `${signal.details}${daysAgo !== null ? ` (${daysAgo}d ago)` : ''}.`
+      : 'LC workflows still leave capital parked between counterparties, carriers, and release conditions.';
+
+    return {
+      subject: workingCapital?.locked
+        ? `${formatCurrencyShort(workingCapital.locked)} working capital at ${company.name}`
+        : `Settlement timing at ${company.name}`,
+      body: `Hi ${contact?.name || 'there'},
+
+${workingCapitalLine} ${signalLine}
+
+Nothing changes for the trader. Your ${roleLabel} still approves credit.
+
+Worth 20 minutes?
+
+Kirk Anderson`,
+      persona: 'CFO',
+      tone: 'executive'
+    };
+  }, []);
+
+  const openEmailModal = (company, contact = null, draftOverride = null) => {
+    const executive = contact || getPrimaryContact(company);
+    const laminarDraft = isLaminarCompany(company) ? buildLaminarEmailDraft(company, executive) : null;
+    const draft = draftOverride || laminarDraft;
+    setSelectedCompany(company);
     setEmailData({
       to: executive?.email || '',
-      subject: `Settlement workflow review for ${company.name}`,
-      body: generatePersonalizedEmail(company, 'CFO', 'professional'),
-      persona: 'CFO',
-      tone: 'professional'
+      subject: draft?.subject || `Settlement workflow review for ${company.name}`,
+      body: draft?.body || generatePersonalizedEmail(company, 'CFO', 'professional'),
+      persona: draft?.persona || 'CFO',
+      tone: draft?.tone || 'professional'
     });
     setShowEmailModal(true);
   };
 
-  const openCalendarModal = (company) => {
+  const openCalendarModal = (company, contact = null) => {
     setSelectedCompany(company);
+    setCalendarLead(buildCalendarLead(company, contact));
     setShowCalendarModal(true);
   };
 
@@ -2318,6 +2383,13 @@ INP² Security Solutions`;
     setSelectedVariant(0);
   }, [selectedCompany?.id, variantsByCompany]);
 
+  useEffect(() => {
+    if (!selectedCompany?.id) {
+      return;
+    }
+    setDetailTab('overview');
+  }, [selectedCompany?.id]);
+
   if (!storageHydrated) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50">
@@ -3287,7 +3359,11 @@ INP² Security Solutions`;
           refreshAllProgress={refreshAllProgress}
           onRefreshSegment={refreshSegment}
           onRefreshAll={refreshAllSegments}
-          onViewCompany={(company) => { setSelectedCompany(company); setCurrentView('detailed'); }}
+          onViewCompany={(company) => {
+            setSelectedCompany(company);
+            setDetailTab('overview');
+            setCurrentView('detailed');
+          }}
           onDraftEmail={openEmailModal}
           onSchedule={openCalendarModal}
           onAddToSequence={(company) => {
@@ -3427,7 +3503,7 @@ INP² Security Solutions`;
                   </CardContent>
                 </Card>
 
-                <Tabs defaultValue="overview" className="space-y-4">
+                <Tabs value={detailTab} onValueChange={setDetailTab} className="space-y-4">
                   <TabsList className="grid w-full grid-cols-3 md:grid-cols-4 lg:grid-cols-7">
                     <TabsTrigger value="overview">Overview</TabsTrigger>
                     <TabsTrigger value="contacts">Contacts</TabsTrigger>
@@ -3440,15 +3516,28 @@ INP² Security Solutions`;
 
                   <TabsContent value="overview" className="space-y-4">
                     {/* Laminar AI-powered Decision Cards (commodity_trading context) */}
-                    {((selectedCompany.contacts || []).some((c) => c.segment || c.sourceMeta?.segment) || selectedCompany.segment) && (
+                    {isLaminarCompany(selectedCompany) ? (
                       <>
                         <LaminarDecisionCards company={selectedCompany} laminarAI={netlifyAPI.laminarAI.bind(netlifyAPI)} />
-                        <LaminarWorkingCapitalCalc company={selectedCompany} />
+                        <LaminarWorkingCapitalCalc
+                          company={selectedCompany}
+                          onCopyToOutreach={(calc) => {
+                            const current = computeWorkingCapital(calc.annualCargoes, calc.avgCargoValue, calc.settlementDays);
+                            setLaminarOutreachContext({
+                              companyId: selectedCompany.id,
+                              ...calc,
+                              lcCostLow: current.lcCostLow,
+                              lcCostHigh: current.lcCostHigh
+                            });
+                            setDetailTab('outreach');
+                          }}
+                        />
                         <LaminarPillarReadiness company={selectedCompany} />
                       </>
-                    )}
+                    ) : null}
 
                     {/* Static heuristic Decision Cards (cybersecurity context fallback) */}
+                    {!isLaminarCompany(selectedCompany) && (
                     <div className="grid grid-cols-3 gap-4 mb-6">
                       {(() => {
                         const decisionCards = generateDecisionCards(selectedCompany);
@@ -3514,6 +3603,7 @@ INP² Security Solutions`;
                         );
                       })()}
                     </div>
+                    )}
 
                     {/* Health Meters */}
                     <Card className="mb-4">
@@ -3854,23 +3944,23 @@ INP² Security Solutions`;
                   </TabsContent>
 
                   <TabsContent value="outreach" className="space-y-4">
-                    {((selectedCompany.contacts || []).some((c) => c.segment || c.sourceMeta?.segment) || selectedCompany.segment) && (
+                    {isLaminarCompany(selectedCompany) ? (
                       <LaminarOutreachGenerator
                         company={selectedCompany}
+                        contextOverride={laminarOutreachContext?.companyId === selectedCompany.id ? laminarOutreachContext : null}
                         laminarAI={netlifyAPI.laminarAI.bind(netlifyAPI)}
                         onSendEmail={(company, variant, persona, tone) => {
                           const exec = getPrimaryContact(company);
-                          setEmailData({
-                            to: exec?.email || '',
+                          openEmailModal(company, exec, {
                             subject: variant.subject || `Settlement workflow review for ${company.name}`,
                             body: variant.body || '',
                             persona,
                             tone
                           });
-                          setShowEmailModal(true);
                         }}
                       />
-                    )}
+                    ) : null}
+                    {!isLaminarCompany(selectedCompany) && (
                     <Card>
                       <CardHeader>
                         <CardTitle>Outreach Engine v2</CardTitle>
@@ -4032,6 +4122,7 @@ INP² Security Solutions`;
                         )}
                       </CardContent>
                     </Card>
+                    )}
                   </TabsContent>
 
                   <TabsContent value="activity">
@@ -4747,11 +4838,14 @@ INP² Security Solutions`;
       )}
 
       {/* Calendar Scheduler Modal */}
-      {showCalendarModal && selectedCompany && (
+      {showCalendarModal && calendarLead && (
         <CalendarScheduler
-          lead={selectedCompany}
+          lead={calendarLead}
           onScheduled={handleMeetingScheduled}
-          onClose={() => setShowCalendarModal(false)}
+          onClose={() => {
+            setShowCalendarModal(false);
+            setCalendarLead(null);
+          }}
           netlifyAPI={netlifyAPI}
         />
       )}
@@ -4917,14 +5011,14 @@ const SEGMENT_COLOR_BG = {
   energy_traders: 'bg-amber-50 border-amber-200',
   banks: 'bg-blue-50 border-blue-200',
   midstream: 'bg-emerald-50 border-emerald-200',
-  inspection: 'bg-purple-50 border-purple-200'
+  inspection: 'bg-slate-50 border-slate-200'
 };
 
 const SEGMENT_COLOR_ACCENT = {
   energy_traders: 'text-amber-700',
   banks: 'text-blue-700',
   midstream: 'text-emerald-700',
-  inspection: 'text-purple-700'
+  inspection: 'text-slate-700'
 };
 
 const LaminarMetricsBar = ({ companies, onJumpToSegment }) => {
@@ -4954,7 +5048,7 @@ const LaminarMetricsBar = ({ companies, onJumpToSegment }) => {
                 <span className="text-base">{SEGMENT_ICONS[segId]}</span>
                 <span className={`text-xs font-semibold ${SEGMENT_COLOR_ACCENT[segId]}`}>{segment.label}</span>
               </div>
-              <span className={`text-lg font-bold ${scoreColor}`}>{metrics.avgScore}</span>
+              <span className={`text-sm font-bold ${scoreColor}`}>avg {metrics.avgScore}</span>
             </div>
             <div className="flex items-center gap-3 text-[11px] text-gray-600">
               <span>{metrics.companies} cos</span>
@@ -5056,14 +5150,14 @@ const LaminarContactCard = ({ contact, company, heat, onViewCompany, onDraftEmai
         )}
       </button>
       <div className="flex gap-1 mt-2 pt-2 border-t border-gray-100">
-        <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={(e) => { e.stopPropagation(); onDraftEmail(company); }} title="Draft email">
-          <Mail className="w-3 h-3" />
+        <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={(e) => { e.stopPropagation(); onDraftEmail(company, contact); }} title="Draft email">
+          <Mail className="w-3 h-3 mr-1" />Email
         </Button>
-        <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={(e) => { e.stopPropagation(); onSchedule(company); }} title="Schedule call">
-          <Calendar className="w-3 h-3" />
+        <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={(e) => { e.stopPropagation(); onSchedule(company, contact); }} title="Schedule call">
+          <Calendar className="w-3 h-3 mr-1" />Schedule
         </Button>
-        <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={(e) => { e.stopPropagation(); onAddToSequence(company); }} title="Add to sequence">
-          <Plus className="w-3 h-3" />
+        <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={(e) => { e.stopPropagation(); onAddToSequence(company, contact); }} title="Add to sequence">
+          <Plus className="w-3 h-3 mr-1" />+ Seq
         </Button>
       </div>
     </div>
@@ -5081,7 +5175,8 @@ const LaminarSegmentColumn = ({
   onDraftEmail,
   onSchedule,
   onAddToSequence,
-  getRoleCategoryLabel
+  getRoleCategoryLabel,
+  getSegmentForContact
 }) => {
   const segment = LAMINAR_SEGMENTS[segmentId];
 
@@ -5092,29 +5187,18 @@ const LaminarSegmentColumn = ({
   }, [companies]);
 
   const segmentContacts = useMemo(() => {
-    const list = [];
-    for (const company of companies) {
-      const contacts = Array.isArray(company.contacts) ? company.contacts : [];
-      for (const contact of contacts) {
-        if ((contact.segment || contact.sourceMeta?.segment || '') === segmentId
-          || (contact.segment === undefined && contact.sourceMeta?.segment === undefined)) {
-          // Fall back to inference for legacy contacts
-        }
-      }
-    }
-    // Use the helper from the inner module
     const flat = [];
     for (const company of companies) {
       const contacts = Array.isArray(company.contacts) ? company.contacts : [];
       for (const contact of contacts) {
-        const seg = contact.segment ?? contact.sourceMeta?.segment ?? null;
+        const seg = getSegmentForContact(contact);
         if (seg === segmentId) {
           flat.push({ ...contact, _company: company, companyId: company.id });
         }
       }
     }
     return sortContactsBy(flat, sortMode, companiesById);
-  }, [companies, segmentId, sortMode, companiesById]);
+  }, [companies, companiesById, getSegmentForContact, segmentId, sortMode]);
 
   const topSignal = useMemo(() => getTopSignalForSegment(companies, segmentId), [companies, segmentId]);
 
@@ -5262,6 +5346,7 @@ const LaminarPilotBoard = ({
             onSchedule={onSchedule}
             onAddToSequence={onAddToSequence}
             getRoleCategoryLabel={getRoleCategoryLabel}
+            getSegmentForContact={getLaminarSegmentForContact}
           />
         ))}
       </div>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -47,13 +47,25 @@ const TONES = [
   { value: 'Urgent', label: 'Urgent' }
 ];
 
-export default function LaminarOutreachGenerator({ company, laminarAI, onSendEmail }) {
+const FALLBACK_BANNER_KEY = 'laminar-outreach-fallback-dismissed';
+
+export default function LaminarOutreachGenerator({ company, contextOverride = null, laminarAI, onSendEmail }) {
   const [persona, setPersona] = useState('CFO');
   const [tone, setTone] = useState('Executive');
   const [variants, setVariants] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [fallback, setFallback] = useState(false);
+  const [showFallbackBanner, setShowFallbackBanner] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return window.sessionStorage.getItem(FALLBACK_BANNER_KEY) !== '1';
+  });
+
+  useEffect(() => {
+    setVariants(null);
+    setError(null);
+    setFallback(false);
+  }, [company?.id, contextOverride?.companyId]);
 
   const generate = async () => {
     if (!company) return;
@@ -65,6 +77,9 @@ export default function LaminarOutreachGenerator({ company, laminarAI, onSendEma
     const topSignal = (Array.isArray(company.signals) ? company.signals : [])
       .sort((a, b) => (b.scoreImpact || 0) - (a.scoreImpact || 0))[0];
     const primaryContact = (company.contacts || [])[0] || {};
+    const lockedValue = contextOverride?.workingCapitalLocked ?? wc?.locked ?? 0;
+    const lcCostLow = contextOverride?.lcCostLow ?? wc?.lcCostLow ?? 0;
+    const lcCostHigh = contextOverride?.lcCostHigh ?? wc?.lcCostHigh ?? 0;
 
     const payload = {
       company: company.name || 'Unknown',
@@ -72,11 +87,11 @@ export default function LaminarOutreachGenerator({ company, laminarAI, onSendEma
       contactTitle: primaryContact.title || persona,
       persona,
       tone,
-      annualCargoes: company.annualCargoes || 'unknown',
-      avgCargoValue: company.avgCargoValue || 'unknown',
-      workingCapitalLocked: wc?.locked ? wc.locked.toLocaleString() : '0',
-      lcCostLow: wc?.lcCostLow ? wc.lcCostLow.toLocaleString() : '0',
-      lcCostHigh: wc?.lcCostHigh ? wc.lcCostHigh.toLocaleString() : '0',
+      annualCargoes: contextOverride?.annualCargoes ?? company.annualCargoes ?? 'unknown',
+      avgCargoValue: contextOverride?.avgCargoValue ?? company.avgCargoValue ?? 'unknown',
+      workingCapitalLocked: lockedValue ? Number(lockedValue).toLocaleString() : '0',
+      lcCostLow: lcCostLow ? Number(lcCostLow).toLocaleString() : '0',
+      lcCostHigh: lcCostHigh ? Number(lcCostHigh).toLocaleString() : '0',
       currentSettlementMethod: company.currentSettlementMethod?.join?.(', ') || 'Letter of Credit',
       topSignal: topSignal?.details || 'no recent signal',
       recentNews: (company.news || []).slice(0, 2).map((n) => n.title).join(' | ') || 'no recent news',
@@ -89,7 +104,7 @@ export default function LaminarOutreachGenerator({ company, laminarAI, onSendEma
       try {
         const parsed = JSON.parse(text);
         setVariants(parsed);
-        setFallback(!res?.live);
+        setFallback(res?.meta?.live === false);
       } catch {
         setError('AI output was not valid JSON. Falling back to template.');
         setVariants(buildLocalFallback(payload));
@@ -145,7 +160,7 @@ export default function LaminarOutreachGenerator({ company, laminarAI, onSendEma
               className="w-full bg-amber-600 hover:bg-amber-700"
             >
               {loading
-                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Generating…</>
+                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Generating outreach…</>
                 : 'Generate 2 Variants'}
             </Button>
           </div>
@@ -156,9 +171,21 @@ export default function LaminarOutreachGenerator({ company, laminarAI, onSendEma
             {error}
           </div>
         )}
-        {fallback && variants && (
-          <div className="text-xs px-3 py-2 bg-amber-50 border border-amber-200 rounded text-amber-800">
-            Live AI unavailable — showing template-based content.
+        {fallback && variants && showFallbackBanner && (
+          <div className="flex items-start justify-between gap-3 text-xs px-3 py-2 bg-amber-50 border border-amber-200 rounded text-amber-800">
+            <span>Live AI unavailable — showing template-based content. Refresh to retry.</span>
+            <button
+              type="button"
+              className="font-semibold underline underline-offset-2"
+              onClick={() => {
+                setShowFallbackBanner(false);
+                if (typeof window !== 'undefined') {
+                  window.sessionStorage.setItem(FALLBACK_BANNER_KEY, '1');
+                }
+              }}
+            >
+              Dismiss
+            </button>
           </div>
         )}
 

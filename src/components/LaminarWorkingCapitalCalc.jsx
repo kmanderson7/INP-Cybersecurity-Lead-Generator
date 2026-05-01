@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,6 +17,13 @@ export default function LaminarWorkingCapitalCalc({ company, onCopyToOutreach })
   const [value, setValue] = useState(initial.value);
   const [currentDays, setCurrentDays] = useState(initial.currentDays);
   const [targetDays, setTargetDays] = useState(initial.targetDays);
+
+  useEffect(() => {
+    setCargoes(initial.cargoes);
+    setValue(initial.value);
+    setCurrentDays(initial.currentDays);
+    setTargetDays(initial.targetDays);
+  }, [initial]);
 
   const current = computeWorkingCapital(cargoes, value, currentDays);
   const target = computeWorkingCapital(cargoes, value, targetDays);
@@ -85,7 +92,14 @@ export default function LaminarWorkingCapitalCalc({ company, onCopyToOutreach })
             <Button
               size="sm"
               variant="outline"
-              onClick={() => onCopyToOutreach({ cargoes, value, currentDays, targetDays, locked: current.locked, freed })}
+              onClick={() => onCopyToOutreach({
+                annualCargoes: cargoes,
+                avgCargoValue: value,
+                settlementDays: currentDays,
+                laminarDays: targetDays,
+                workingCapitalLocked: current.locked,
+                workingCapitalFreed: freed
+              })}
             >
               Copy to Outreach
             </Button>
