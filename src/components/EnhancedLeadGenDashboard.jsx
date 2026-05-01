@@ -2218,22 +2218,7 @@ INP² Security Solutions`;
           decorateLeadWithMeta(company, company.sourceMeta || {})
         ) : [];
 
-        let companiesToUse = storedCompanies;
-        let autoFetched = false;
-        if (!storedCompanies.length) {
-          try {
-            const result = await netlifyAPI.fetchLeads({ scoringProfile: 'commodity_trading' });
-            if (result?.success && Array.isArray(result.leads) && result.leads.length > 0) {
-              companiesToUse = result.leads.map((lead) => decorateLeadWithMeta(lead, result.meta));
-              autoFetched = true;
-            } else {
-              companiesToUse = [];
-            }
-          } catch (e) {
-            console.warn('Laminar leads auto-fetch failed on startup:', e.message);
-            companiesToUse = [];
-          }
-        }
+        const companiesToUse = storedCompanies;
 
         const selectedFromState = leadState?.selectedCompanyId
           ? companiesToUse.find((company) => company.id === leadState.selectedCompanyId) || companiesToUse[0]
@@ -2250,7 +2235,6 @@ INP² Security Solutions`;
         setLastEmailResult(leadState?.lastEmailResult || null);
         setIntegrationHealth(health?.providers || []);
         setApiConnected(companiesToUse.length > 0);
-        if (autoFetched) setCurrentView('laminar');
         if (laminarState) {
           if (laminarState.contactsTabSegment) setContactsTabSegment(laminarState.contactsTabSegment);
           if (laminarState.pilotViewSegment !== undefined) setPilotViewSegment(laminarState.pilotViewSegment);
@@ -2268,6 +2252,14 @@ INP² Security Solutions`;
 
     hydrateState();
   }, []);
+
+  // On first load with no stored companies, fetch real Laminar contacts by segment
+  useEffect(() => {
+    if (!storageHydrated || companies.length > 0) return;
+    setCurrentView('laminar');
+    refreshAllSegments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageHydrated]);
 
   useEffect(() => {
     if (!storageHydrated) {
