@@ -2464,7 +2464,7 @@ INP² Security Solutions`;
               className="flex items-center gap-2"
             >
               <Briefcase className="w-4 h-4" />
-              Laminar Pilot
+              Laminar Digital
             </Button>
           </div>
 
@@ -5311,7 +5311,7 @@ const LaminarPilotBoard = ({
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-lg font-semibold text-gray-900">Laminar Pilot — Commodity Trading Prospecting</h3>
+          <h3 className="text-lg font-semibold text-gray-900">Laminar Digital — Commodity Trading Prospecting</h3>
           <p className="text-sm text-gray-600">
             Working capital intelligence for {companies.length} {companies.length === 1 ? 'company' : 'companies'}.
             Heat-scored contacts grouped by pilot segment.
