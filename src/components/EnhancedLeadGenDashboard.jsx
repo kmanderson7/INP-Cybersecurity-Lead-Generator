@@ -155,6 +155,10 @@ const netlifyAPI = {
     return this._postJSON('/.netlify/functions/laminar-ai', { feature, payload });
   },
 
+  async laminarIntel(segmentId) {
+    return this._postJSON('/.netlify/functions/laminar-intel', { segmentId });
+  },
+
   async analyzeTech(domain) {
     return this._postJSON('/.netlify/functions/enrich-company', { domain });
   },
@@ -300,6 +304,7 @@ const EnhancedLeadGenDashboard = () => {
   const [sortBySegment, setSortBySegment] = useState({ energy_traders: 'heat', banks: 'heat', midstream: 'heat', inspection: 'heat' });
   const [refreshingSegments, setRefreshingSegments] = useState({});
   const [refreshAllProgress, setRefreshAllProgress] = useState(null);
+  const [laminarIntelLoading, setLaminarIntelLoading] = useState(false);
   const [detailTab, setDetailTab] = useState('overview');
   const [calendarLead, setCalendarLead] = useState(null);
   const [laminarOutreachContext, setLaminarOutreachContext] = useState(null);
@@ -1570,6 +1575,31 @@ P.S. If helpful, I can share examples of where teams typically uncover reconcili
       await refreshSegment(segId);
     }
     setRefreshAllProgress(null);
+  };
+
+  const runLaminarIntel = async () => {
+    setLaminarIntelLoading(true);
+    try {
+      const result = await netlifyAPI.laminarIntel();
+      if (result?.success && Array.isArray(result.people) && result.people.length > 0) {
+        mergeApolloPeopleIntoCompanies(result.people, result.meta || {}, null);
+        appendActivityEvent({
+          category: 'lead_refresh',
+          title: 'Web intelligence scan complete',
+          detail: `${result.people.length} contacts found via news, SEC filings, and AI synthesis`
+        });
+      } else {
+        appendActivityEvent({
+          category: 'lead_refresh',
+          title: 'Web intel scan returned no new leads',
+          detail: 'Try again later or check NEWS_API_KEY and OPENAI_API_KEY in Netlify'
+        });
+      }
+    } catch (e) {
+      console.error('[laminar-intel] scan failed:', e.message);
+    } finally {
+      setLaminarIntelLoading(false);
+    }
   };
 
   const runApolloPersonEnrich = async () => {
@@ -3351,6 +3381,8 @@ INP² Security Solutions`;
           refreshAllProgress={refreshAllProgress}
           onRefreshSegment={refreshSegment}
           onRefreshAll={refreshAllSegments}
+          onScanWeb={runLaminarIntel}
+          webIntelLoading={laminarIntelLoading}
           onViewCompany={(company) => {
             setSelectedCompany(company);
             setDetailTab('overview');
@@ -5130,7 +5162,14 @@ const LaminarContactCard = ({ contact, company, heat, onViewCompany, onDraftEmai
             <div className="text-xs text-gray-600 truncate">{contact.title}</div>
             <div className="text-[11px] text-gray-500 truncate">{company?.name}</div>
           </div>
-          {heatBadge}
+          <div className="flex flex-col items-end gap-0.5 shrink-0">
+            {heatBadge}
+            {contact.intelSource && (
+              <span className="text-[9px] bg-amber-100 text-amber-700 border border-amber-300 rounded px-1 leading-4">
+                {contact.intelSource === 'sec' ? 'SEC' : contact.intelSource === 'news' ? 'News' : 'AI'}
+              </span>
+            )}
+          </div>
         </div>
         {wc && (
           <div className="text-[11px] text-amber-700 font-semibold mb-1">
@@ -5297,7 +5336,9 @@ const LaminarPilotBoard = ({
   onDraftEmail,
   onSchedule,
   onAddToSequence,
-  getRoleCategoryLabel
+  getRoleCategoryLabel,
+  onScanWeb,
+  webIntelLoading
 }) => {
   const handleJumpTo = (segmentId) => {
     const el = document.getElementById(`laminar-segment-${segmentId}`);
@@ -5306,7 +5347,7 @@ const LaminarPilotBoard = ({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h3 className="text-lg font-semibold text-gray-900">Laminar Digital — Commodity Trading Prospecting</h3>
           <p className="text-sm text-gray-600">
@@ -5314,16 +5355,29 @@ const LaminarPilotBoard = ({
             Heat-scored contacts grouped by pilot segment.
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onRefreshAll}
-          disabled={!!refreshAllProgress}
-        >
-          {refreshAllProgress
-            ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Refreshing {refreshAllProgress.current}/{refreshAllProgress.total} — {refreshAllProgress.label}…</>
-            : <><RefreshCw className="w-4 h-4 mr-2" />Refresh All Segments</>}
-        </Button>
+        <div className="flex gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onScanWeb}
+            disabled={webIntelLoading || !!refreshAllProgress}
+            className="border-amber-300 text-amber-700 hover:bg-amber-50"
+          >
+            {webIntelLoading
+              ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Scanning web…</>
+              : <><Search className="w-4 h-4 mr-2" />Web Intel</>}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onRefreshAll}
+            disabled={!!refreshAllProgress || webIntelLoading}
+          >
+            {refreshAllProgress
+              ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Refreshing {refreshAllProgress.current}/{refreshAllProgress.total} — {refreshAllProgress.label}…</>
+              : <><RefreshCw className="w-4 h-4 mr-2" />Refresh All Segments</>}
+          </Button>
+        </div>
       </div>
 
       <LaminarMetricsBar companies={companies} onJumpToSegment={handleJumpTo} />
