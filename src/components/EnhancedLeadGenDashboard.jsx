@@ -3379,7 +3379,7 @@ INP² Security Solutions`;
         />
       ) : (
         /* Detailed View */
-        filteredCompanies.length > 0 && (
+        filteredCompanies.length > 0 ? (
         <div className="grid grid-cols-12 gap-6">
           <div className="col-span-4 space-y-3">
             <h3 className="text-lg font-semibold text-gray-900">Leads ({filteredCompanies.length})</h3>
@@ -4628,6 +4628,11 @@ INP² Security Solutions`;
             )}
           </div>
         </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center py-20 text-center text-gray-400">
+            <p className="text-lg font-semibold mb-2 text-gray-600">No leads loaded</p>
+            <p className="text-sm">Click <span className="font-semibold text-purple-700">Apollo API</span> in the header to fetch trade finance contacts, or use the Generate Leads panel.</p>
+          </div>
         )
       )}
 
