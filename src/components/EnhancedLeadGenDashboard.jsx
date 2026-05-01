@@ -32,6 +32,8 @@ import BulkEmail from './BulkEmail';
 import Analytics from './Analytics';
 import LaminarDecisionCards from './LaminarDecisionCards';
 import LaminarOutreachGenerator from './LaminarOutreachGenerator';
+import LaminarWorkingCapitalCalc from './LaminarWorkingCapitalCalc';
+import LaminarPillarReadiness from './LaminarPillarReadiness';
 import {
   Search, Star, TrendingUp, Mail, Phone, Globe, AlertCircle, Shield,
   DollarSign, Users, Calendar, Filter, Loader2, Crown, List, AlertTriangle,
@@ -3439,7 +3441,11 @@ INP² Security Solutions`;
                   <TabsContent value="overview" className="space-y-4">
                     {/* Laminar AI-powered Decision Cards (commodity_trading context) */}
                     {((selectedCompany.contacts || []).some((c) => c.segment || c.sourceMeta?.segment) || selectedCompany.segment) && (
-                      <LaminarDecisionCards company={selectedCompany} laminarAI={netlifyAPI.laminarAI.bind(netlifyAPI)} />
+                      <>
+                        <LaminarDecisionCards company={selectedCompany} laminarAI={netlifyAPI.laminarAI.bind(netlifyAPI)} />
+                        <LaminarWorkingCapitalCalc company={selectedCompany} />
+                        <LaminarPillarReadiness company={selectedCompany} />
+                      </>
                     )}
 
                     {/* Static heuristic Decision Cards (cybersecurity context fallback) */}
