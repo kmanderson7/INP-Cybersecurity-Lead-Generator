@@ -2006,128 +2006,13 @@ INP² Security Solutions`;
       }
     } catch (e) {
       console.error('API call failed:', e);
-      alert(`API call failed: ${e.message}. Using mock data instead.`);
+      alert(`API call failed: ${e.message}. Verify APOLLO_LAMINAR_API_KEY is set.`);
     } finally {
       setFlag(false);
     }
   }
 
   useEffect(() => {
-    const generateMockLeads = () => {
-      const industries = ['Software', 'Healthcare', 'Finance', 'Manufacturing', 'Retail', 'Education', 'Government', 'Energy', 'Real Estate', 'Legal', 'Technology'];
-      const companyNames = [
-        'TechCorp Solutions', 'HealthFirst Medical', 'SecureBank Corp', 'ManuFacture Pro', 'RetailMax Inc',
-        'EduTech Systems', 'GovSolutions Ltd', 'EnergyFlow Corp', 'PropertyTech Co', 'LegalEase Partners',
-        'DataDriven Inc', 'CloudFirst Systems', 'CyberShield Corp', 'InnovateLab', 'SmartManufacturing',
-        'DigitalHealth Plus', 'FinanceSecure LLC', 'BuildTech Solutions', 'SchoolSafe Systems', 'PowerGrid Security',
-        'SafeRetail Co', 'LegalGuard Inc', 'TechFlow Dynamics', 'MedSecure Systems', 'BankTech Innovations',
-        'FactoryShield Corp', 'EduProtect Solutions', 'CityTech Systems', 'GreenEnergy Security', 'PropertyGuard LLC',
-        'CloudSecure Dynamics', 'HealthGuard Technologies', 'FinTech Innovations', 'ManufactureTech Pro', 'RetailSecure Plus',
-        'EduCloud Systems', 'GovProtect Solutions', 'EnergySafe Corp', 'RealtyTech Security', 'LawTech Innovations',
-        'DataShield Corporation', 'TechSecure Solutions', 'MedCloud Systems', 'BankGuard Technologies', 'FactorySafe Inc'
-      ];
-
-      const techStacks = [
-        ['AWS', 'React', 'Node.js', 'PostgreSQL'], ['Azure', 'Angular', 'C#', 'SQL Server'],
-        ['GCP', 'Vue.js', 'Python', 'MongoDB'], ['AWS', 'Kubernetes', 'Java', 'Oracle'],
-        ['Azure', 'Docker', 'PHP', 'MySQL'], ['GCP', 'React Native', 'Go', 'Redis']
-      ];
-
-      const securityTools = [
-        ['Okta', 'CrowdStrike', 'Splunk'], ['Microsoft Defender', 'Qualys', 'Varonis'],
-        ['Ping Identity', 'SentinelOne', 'Elastic'], ['Auth0', 'Carbon Black', 'LogRhythm'],
-        ['ForgeRock', 'Cylance', 'QRadar'], ['OneLogin', 'Sophos', 'ArcSight']
-      ];
-
-      const concernsList = [
-        ['Zero-trust architecture', 'Cloud security posture', 'SOC 2 compliance', 'Security awareness training'],
-        ['HIPAA compliance', 'Medical device security', 'Ransomware protection', 'Secure telehealth'],
-        ['PCI DSS compliance', 'Fraud detection', 'API security', 'Customer data protection'],
-        ['OT security', 'Supply chain security', 'Industrial IoT protection', 'Compliance monitoring'],
-        ['E-commerce security', 'Customer data privacy', 'Payment security', 'Inventory protection'],
-        ['FERPA compliance', 'Student data protection', 'Remote learning security', 'Campus network security']
-      ];
-
-      const activities = [
-        'Posted cybersecurity job openings', 'Attended security conference', 'Mentioned security in earnings call',
-        'Experienced security incident', 'Implementing new security tools', 'Security audit scheduled',
-        'Compliance assessment ongoing', 'Security training program launched', 'New CISO hired',
-        'Security budget increased', 'Penetration testing completed', 'Incident response plan updated'
-      ];
-
-      const mockLeads = [];
-      for (let i = 0; i < 45; i++) {
-        const industry = industries[Math.floor(Math.random() * industries.length)];
-        const employeeCount = Math.floor(Math.random() * 2000) + 50;
-        const revenue = `${Math.floor(Math.random() * 200) + 10}M`;
-        const leadScore = Math.floor(Math.random() * 100) + 1;
-        const priority = leadScore >= 80 ? 'Critical' : leadScore >= 60 ? 'High' : leadScore >= 40 ? 'Medium' : 'Low';
-        const statuses = ['New Lead', 'Contacted', 'Qualified', 'Demo Scheduled', 'Proposal Sent', 'Follow-up'];
-
-        mockLeads.push({
-          id: i + 1,
-          name: companyNames[i] || `Company ${i + 1}`,
-          industry,
-          employees: employeeCount,
-          revenue,
-          location: `${['Austin', 'Boston', 'San Francisco', 'New York', 'Chicago', 'Seattle', 'Denver', 'Atlanta'][Math.floor(Math.random() * 8)]}, ${['TX', 'MA', 'CA', 'NY', 'IL', 'WA', 'CO', 'GA'][Math.floor(Math.random() * 8)]}`,
-          website: `https://${(companyNames[i] || `company${i + 1}`).toLowerCase().replace(/\s+/g, '')}.com`,
-          leadScore,
-          priority,
-          lastContact: Math.random() > 0.3 ? `2024-07-${Math.floor(Math.random() * 30) + 1}` : null,
-          status: statuses[Math.floor(Math.random() * statuses.length)],
-          executives: [
-            {
-              name: `${['John', 'Sarah', 'Mike', 'Lisa', 'David', 'Jennifer', 'Robert', 'Emily'][Math.floor(Math.random() * 8)]} ${['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis'][Math.floor(Math.random() * 8)]}`,
-              title: ['CFO', 'Head of Trade Finance', 'Settlement Manager', 'Treasurer', 'Operations Lead'][Math.floor(Math.random() * 5)],
-              email: `contact@${(companyNames[i] || `company${i + 1}`).toLowerCase().replace(/\s+/g, '')}.com`,
-            },
-          ],
-          contacts: [],
-          news: [
-            {
-              date: `2024-07-${Math.floor(Math.random() * 30) + 1}`,
-              title: `${companyNames[i] || `Company ${i + 1}`} ${['raises funding', 'announces expansion', 'launches new product', 'reports growth'][Math.floor(Math.random() * 4)]}`,
-              source: ['TechCrunch', 'Business Wire', 'Company Blog', 'Industry News'][Math.floor(Math.random() * 4)],
-            },
-          ],
-          techStack: techStacks[Math.floor(Math.random() * techStacks.length)],
-          securityTools: securityTools[Math.floor(Math.random() * securityTools.length)],
-          concerns: concernsList[Math.floor(Math.random() * concernsList.length)],
-          recentActivity: [
-            activities[Math.floor(Math.random() * activities.length)],
-            activities[Math.floor(Math.random() * activities.length)],
-            activities[Math.floor(Math.random() * activities.length)],
-          ],
-          socialProof: {
-            linkedinFollowers: Math.floor(Math.random() * 50000) + 1000,
-            glassdoorRating: (Math.random() * 2 + 3).toFixed(1),
-            trustpilotScore: (Math.random() * 2 + 3).toFixed(1),
-          },
-          financials: {
-            funding: `${Math.floor(Math.random() * 100) + 5}M total raised`,
-            lastRound: `Series ${['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)]} - ${Math.floor(Math.random() * 50) + 2}M`,
-            investors: ['Accel Partners', 'Sequoia Capital', 'Andreessen Horowitz', 'Kleiner Perkins'][Math.floor(Math.random() * 4)],
-          },
-          sourceMeta: {
-            source: 'mock',
-            provider: 'local_demo',
-            live: false,
-            fallbackUsed: true,
-            reason: 'Local demo dataset loaded on first render.'
-          }
-        });
-      }
-      return mockLeads.map((lead) => {
-        const contacts = qualifyTradeFinanceContacts(lead.executives, lead.sourceMeta, lead.name);
-        return decorateLeadWithMeta({
-          ...lead,
-          contacts,
-          executives: contacts
-        }, lead.sourceMeta);
-      });
-    };
-
     const hydrateState = async () => {
       try {
         const [leadState, segmentState, sequenceState, outreachState, laminarState, health] = await Promise.all([
@@ -2142,7 +2027,24 @@ INP² Security Solutions`;
         const storedCompanies = Array.isArray(leadState?.companies) ? leadState.companies.map((company) =>
           decorateLeadWithMeta(company, company.sourceMeta || {})
         ) : [];
-        const companiesToUse = storedCompanies.length ? storedCompanies : generateMockLeads();
+
+        let companiesToUse = storedCompanies;
+        let autoFetched = false;
+        if (!storedCompanies.length) {
+          try {
+            const result = await netlifyAPI.fetchLeads({ scoringProfile: 'commodity_trading' });
+            if (result?.success && Array.isArray(result.leads) && result.leads.length > 0) {
+              companiesToUse = result.leads.map((lead) => decorateLeadWithMeta(lead, result.meta));
+              autoFetched = true;
+            } else {
+              companiesToUse = [];
+            }
+          } catch (e) {
+            console.warn('Laminar leads auto-fetch failed on startup:', e.message);
+            companiesToUse = [];
+          }
+        }
+
         const selectedFromState = leadState?.selectedCompanyId
           ? companiesToUse.find((company) => company.id === leadState.selectedCompanyId) || companiesToUse[0]
           : companiesToUse[0];
@@ -2157,7 +2059,8 @@ INP² Security Solutions`;
         setActivityTimeline(leadState?.activityTimeline || []);
         setLastEmailResult(leadState?.lastEmailResult || null);
         setIntegrationHealth(health?.providers || []);
-        setApiConnected(storedCompanies.length > 0);
+        setApiConnected(companiesToUse.length > 0);
+        if (autoFetched) setCurrentView('laminar');
         if (laminarState) {
           if (laminarState.contactsTabSegment) setContactsTabSegment(laminarState.contactsTabSegment);
           if (laminarState.pilotViewSegment !== undefined) setPilotViewSegment(laminarState.pilotViewSegment);
@@ -2165,9 +2068,8 @@ INP² Security Solutions`;
         }
       } catch (error) {
         console.error('Failed to hydrate persisted state:', error);
-        const mockData = generateMockLeads();
-        setCompanies(mockData);
-        setSelectedCompany(mockData[0] || null);
+        setCompanies([]);
+        setSelectedCompany(null);
       } finally {
         setStorageHydrated(true);
       }
@@ -2288,6 +2190,18 @@ INP² Security Solutions`;
     setOutreachVariants([]);
     setSelectedVariant(0);
   }, [selectedCompany?.id, variantsByCompany]);
+
+  if (!storageHydrated) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-50">
+        <div className="text-center space-y-4">
+          <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-lg font-semibold text-gray-700">Loading trade finance leads…</p>
+          <p className="text-sm text-gray-500">Connecting to Apollo Laminar</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 space-y-6 bg-gray-50 min-h-screen">
