@@ -3,7 +3,8 @@ import { createStore } from './baseStore';
 const store = createStore('laminar', {
   contactsTabSegment: 'all',
   pilotViewSegment: null,
-  prospectorSegment: null
+  prospectorSegment: null,
+  sortBySegment: { energy_traders: 'heat', banks: 'heat', midstream: 'heat', inspection: 'heat' }
 });
 
 export async function loadLaminarState() {

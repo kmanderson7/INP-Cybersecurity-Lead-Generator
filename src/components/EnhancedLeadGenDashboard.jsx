@@ -33,8 +33,19 @@ import Analytics from './Analytics';
 import {
   Search, Star, TrendingUp, Mail, Phone, Globe, AlertCircle, Shield,
   DollarSign, Users, Calendar, Filter, Loader2, Crown, List, AlertTriangle,
-  Clock, Brain, Target, Eye, Save, CheckCircle2, Briefcase
+  Clock, Brain, Target, Eye, Save, CheckCircle2, Briefcase,
+  Plus, Flame, RefreshCw
 } from 'lucide-react';
+import {
+  computeContactHeat,
+  computeSegmentMetrics,
+  getTopSignalForSegment,
+  sortContactsBy,
+  getCompanyWorkingCapital,
+  formatCurrencyShort,
+  inferPillarReadiness,
+  SEGMENT_ICONS
+} from '@/lib/laminarMetrics';
 
 /* ---------------- Error Boundary Component ---------------- */
 class ErrorBoundary extends React.Component {
@@ -277,6 +288,9 @@ const EnhancedLeadGenDashboard = () => {
   const [contactsTabSegment, setContactsTabSegment] = useState('all');
   const [pilotViewSegment, setPilotViewSegment] = useState(null);
   const [prospectorSegment, setProspectorSegment] = useState(null);
+  const [sortBySegment, setSortBySegment] = useState({ energy_traders: 'heat', banks: 'heat', midstream: 'heat', inspection: 'heat' });
+  const [refreshingSegments, setRefreshingSegments] = useState({});
+  const [refreshAllProgress, setRefreshAllProgress] = useState(null);
 
   // Signals filtering state
   const [signalFilter, setSignalFilter] = useState('all');
@@ -1382,6 +1396,109 @@ P.S. If helpful, I can share examples of where teams typically uncover reconcili
     }
   };
 
+  const mergeApolloPeopleIntoCompanies = (people, meta, segmentId) => {
+    const byDomain = new Map();
+    for (const person of people) {
+      const domain = (person.organizationDomain || person.organization?.primary_domain || person.organization_domain || '').toLowerCase().trim();
+      const orgName = person.organizationName || person.organization?.name || person.organization_name || domain || 'Unknown';
+      const key = domain || orgName.toLowerCase();
+      if (!byDomain.has(key)) byDomain.set(key, { domain, orgName, contacts: [] });
+      byDomain.get(key).contacts.push({
+        name: person.name || `${person.firstName || ''} ${person.lastName || ''}`.trim() || 'Unknown',
+        title: person.title || person.headline || '',
+        email: person.email || '',
+        relevanceScore: Number(person.relevanceScore || person.score || 0),
+        roleCategory: person.roleCategory || null,
+        segment: person.segment || segmentId,
+        sourceMeta: { ...(meta || {}), segment: person.segment || segmentId }
+      });
+    }
+
+    setCompanies((prev) => {
+      const next = [...prev];
+      for (const [, group] of byDomain) {
+        const existingIdx = next.findIndex((c) => {
+          const cDomain = (c.domain || c.website || '').toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
+          return cDomain === group.domain || (c.name || '').toLowerCase() === group.orgName.toLowerCase();
+        });
+        if (existingIdx >= 0) {
+          const existing = next[existingIdx];
+          const existingEmails = new Set((existing.contacts || []).map((c) => (c.email || '').toLowerCase()).filter(Boolean));
+          const newOnes = group.contacts.filter((c) => !c.email || !existingEmails.has(c.email.toLowerCase()));
+          next[existingIdx] = {
+            ...existing,
+            contacts: [...(existing.contacts || []), ...newOnes],
+            executives: [...(existing.executives || []), ...newOnes],
+            lastUpdated: new Date().toISOString()
+          };
+        } else {
+          next.push(decorateLeadWithMeta({
+            id: `apollo-${group.domain || group.orgName}-${Date.now()}`,
+            name: group.orgName,
+            domain: group.domain,
+            website: group.domain ? `https://${group.domain}` : '',
+            industry: 'Energy',
+            employees: 0,
+            location: '',
+            leadScore: 50,
+            priority: 'Medium',
+            status: 'New Lead',
+            contacts: group.contacts,
+            executives: group.contacts,
+            news: [],
+            recentActivity: [],
+            signals: [],
+            segment: segmentId,
+            sourceMeta: { ...(meta || {}), segment: segmentId }
+          }, meta || {}));
+        }
+      }
+      return next;
+    });
+  };
+
+  const refreshSegment = async (segmentId) => {
+    const segment = LAMINAR_SEGMENTS[segmentId];
+    if (!segment) return;
+    setRefreshingSegments((prev) => ({ ...prev, [segmentId]: true }));
+    setApolloError(null);
+    try {
+      const result = await netlifyAPI.apolloPeopleSearch(
+        segment.titles,
+        segment.domains,
+        { scoringProfile: 'commodity_trading', segment: segmentId }
+      );
+      if (result?.success && Array.isArray(result.people) && result.people.length > 0) {
+        mergeApolloPeopleIntoCompanies(result.people, result.meta || {}, segmentId);
+        appendActivityEvent({
+          category: 'lead_refresh',
+          title: `${segment.label} refreshed`,
+          detail: `${result.people.length} contacts from Apollo Laminar`
+        });
+      } else {
+        appendActivityEvent({
+          category: 'lead_refresh',
+          title: `${segment.label} refresh — no new contacts`,
+          detail: 'Apollo returned an empty result for this segment.'
+        });
+      }
+    } catch (e) {
+      setApolloError(`${segment.label} refresh failed: ${e.message}`);
+    } finally {
+      setRefreshingSegments((prev) => ({ ...prev, [segmentId]: false }));
+    }
+  };
+
+  const refreshAllSegments = async () => {
+    const segments = LAMINAR_SEGMENT_ORDER;
+    for (let i = 0; i < segments.length; i += 1) {
+      const segId = segments[i];
+      setRefreshAllProgress({ current: i + 1, total: segments.length, label: LAMINAR_SEGMENTS[segId].label });
+      await refreshSegment(segId);
+    }
+    setRefreshAllProgress(null);
+  };
+
   const runApolloPersonEnrich = async () => {
     const { firstName, lastName, linkedinUrl, email } = apolloEnrichInput;
     if (!firstName && !lastName && !linkedinUrl && !email) {
@@ -2065,6 +2182,7 @@ INP² Security Solutions`;
           if (laminarState.contactsTabSegment) setContactsTabSegment(laminarState.contactsTabSegment);
           if (laminarState.pilotViewSegment !== undefined) setPilotViewSegment(laminarState.pilotViewSegment);
           if (laminarState.prospectorSegment !== undefined) setProspectorSegment(laminarState.prospectorSegment);
+          if (laminarState.sortBySegment) setSortBySegment((prev) => ({ ...prev, ...laminarState.sortBySegment }));
         }
       } catch (error) {
         console.error('Failed to hydrate persisted state:', error);
@@ -2140,11 +2258,12 @@ INP² Security Solutions`;
     saveLaminarState({
       contactsTabSegment,
       pilotViewSegment,
-      prospectorSegment
+      prospectorSegment,
+      sortBySegment
     }).catch((error) => {
       console.error('Failed to persist laminar state:', error);
     });
-  }, [contactsTabSegment, pilotViewSegment, prospectorSegment, storageHydrated]);
+  }, [contactsTabSegment, pilotViewSegment, prospectorSegment, sortBySegment, storageHydrated]);
 
   const getScoreColor = (score) => {
     if (score >= 80) return 'bg-green-500';
@@ -3152,69 +3271,28 @@ INP² Security Solutions`;
           </div>
         </div>
       ) : currentView === 'laminar' ? (
-        /* Laminar Pilot View — 4-column segment board across all loaded companies */
-        <div className="space-y-4">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900">Laminar Pilot — Commodity Trading Segments</h3>
-            <p className="text-sm text-gray-600">Qualified contacts from {filteredCompanies.length} {filteredCompanies.length === 1 ? 'company' : 'companies'}, grouped by pilot segment. Click a contact to open the company detail.</p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {LAMINAR_SEGMENT_ORDER.map((segId) => {
-              const segment = LAMINAR_SEGMENTS[segId];
-              const segmentContacts = filteredCompanies.flatMap((company) =>
-                getSortedContacts(company)
-                  .filter((c) => getSegmentForContact(c) === segId)
-                  .map((c) => ({ ...c, _company: company }))
-              ).sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
-
-              return (
-                <div key={segId} className="bg-gray-50 rounded-lg p-4 min-h-[600px] border border-gray-200">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h4 className="font-semibold text-gray-800">{segment.label}</h4>
-                    <Badge variant="outline" className="text-xs">{segmentContacts.length}</Badge>
-                  </div>
-                  <p className="text-xs text-gray-500 mb-3">{segment.description}</p>
-                  {segmentContacts.length === 0 ? (
-                    <div className="text-xs text-gray-400 italic">
-                      No qualified contacts yet. Use Apollo Prospector with the {segment.label} segment to find prospects.
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {segmentContacts.map((contact, i) => (
-                        <button
-                          key={`${segId}-${contact._company.id}-${i}`}
-                          type="button"
-                          onClick={() => {
-                            setSelectedCompany(contact._company);
-                            setCurrentView('detailed');
-                          }}
-                          className="w-full text-left p-2 bg-white border border-gray-200 rounded hover:border-blue-400 hover:shadow-sm transition"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0 flex-1">
-                              <div className="text-sm font-medium truncate">{contact.name || 'Unknown'}</div>
-                              <div className="text-xs text-gray-600 truncate">{contact.title}</div>
-                              <div className="text-xs text-gray-500 truncate">{contact._company.name}</div>
-                              {contact.email && (
-                                <div className="text-xs text-blue-600 truncate">{contact.email}</div>
-                              )}
-                            </div>
-                            <Badge variant={(contact.relevanceScore || 0) >= 80 ? 'default' : 'secondary'} className="text-xs shrink-0">
-                              {contact.relevanceScore || 0}
-                            </Badge>
-                          </div>
-                          <div className="mt-1 text-[10px] text-gray-500">
-                            {getRoleCategoryLabel(contact.roleCategory)}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <LaminarPilotBoard
+          companies={filteredCompanies}
+          sortBySegment={sortBySegment}
+          onSortChange={(segId, mode) => setSortBySegment((prev) => ({ ...prev, [segId]: mode }))}
+          refreshingSegments={refreshingSegments}
+          refreshAllProgress={refreshAllProgress}
+          onRefreshSegment={refreshSegment}
+          onRefreshAll={refreshAllSegments}
+          onViewCompany={(company) => { setSelectedCompany(company); setCurrentView('detailed'); }}
+          onDraftEmail={openEmailModal}
+          onSchedule={openCalendarModal}
+          onAddToSequence={(company) => {
+            const variant = (variantsByCompany?.[company.id] || [])[selectedVariant || 0] || {
+              persona: 'CFO',
+              tone: 'professional',
+              subject: `Working capital review for ${company.name}`,
+              body: `Hi {name}, exploring a 20-minute call on settlement workflow.`
+            };
+            addToSequence(company, variant);
+          }}
+          getRoleCategoryLabel={getRoleCategoryLabel}
+        />
       ) : (
         /* Detailed View */
         filteredCompanies.length > 0 && (
@@ -4796,6 +4874,366 @@ const TabContentSkeleton = () => (
     </div>
   </div>
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Laminar Pilot Board (v2) — metrics bar, Why-Now cards, heat-scored contacts
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SEGMENT_COLOR_BG = {
+  energy_traders: 'bg-amber-50 border-amber-200',
+  banks: 'bg-blue-50 border-blue-200',
+  midstream: 'bg-emerald-50 border-emerald-200',
+  inspection: 'bg-purple-50 border-purple-200'
+};
+
+const SEGMENT_COLOR_ACCENT = {
+  energy_traders: 'text-amber-700',
+  banks: 'text-blue-700',
+  midstream: 'text-emerald-700',
+  inspection: 'text-purple-700'
+};
+
+const LaminarMetricsBar = ({ companies, onJumpToSegment }) => {
+  const metricsBySegment = useMemo(() => {
+    const m = {};
+    for (const segId of LAMINAR_SEGMENT_ORDER) {
+      m[segId] = computeSegmentMetrics(companies, segId);
+    }
+    return m;
+  }, [companies]);
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      {LAMINAR_SEGMENT_ORDER.map((segId) => {
+        const segment = LAMINAR_SEGMENTS[segId];
+        const metrics = metricsBySegment[segId];
+        const scoreColor = metrics.avgScore >= 75 ? 'text-green-700' : metrics.avgScore >= 50 ? 'text-amber-700' : 'text-gray-500';
+        return (
+          <button
+            key={segId}
+            type="button"
+            onClick={() => onJumpToSegment(segId)}
+            className={`p-3 rounded-lg border text-left hover:shadow-md transition ${SEGMENT_COLOR_BG[segId]}`}
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1.5">
+                <span className="text-base">{SEGMENT_ICONS[segId]}</span>
+                <span className={`text-xs font-semibold ${SEGMENT_COLOR_ACCENT[segId]}`}>{segment.label}</span>
+              </div>
+              <span className={`text-lg font-bold ${scoreColor}`}>{metrics.avgScore}</span>
+            </div>
+            <div className="flex items-center gap-3 text-[11px] text-gray-600">
+              <span>{metrics.companies} cos</span>
+              <span>{metrics.contacts} contacts</span>
+            </div>
+            <div className="mt-1 flex items-center gap-2 text-[11px]">
+              {metrics.hotCount > 0 && (
+                <span className="inline-flex items-center gap-0.5 text-red-600 font-medium">
+                  <Flame className="w-3 h-3" />{metrics.hotCount}
+                </span>
+              )}
+              {metrics.warmCount > 0 && (
+                <span className="text-amber-600 font-medium">● {metrics.warmCount}</span>
+              )}
+              {metrics.hotCount === 0 && metrics.warmCount === 0 && (
+                <span className="text-gray-400">no heat yet</span>
+              )}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
+const LaminarWhyNowCard = ({ topSignal, segmentId, onView }) => {
+  if (!topSignal) {
+    return (
+      <div className="text-[11px] text-gray-500 italic px-2 py-1.5 bg-white border border-gray-200 rounded mb-2">
+        No fresh signals — refresh to scan for breach proximity, exec moves, and active RFPs.
+      </div>
+    );
+  }
+
+  const heatIcon = topSignal.scoreImpact >= 30 ? <Flame className="w-3.5 h-3.5 text-red-500" /> : <span className="text-amber-500">●</span>;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onView(topSignal.companyId)}
+      className="w-full text-left px-2 py-2 bg-white border border-gray-200 rounded mb-2 hover:border-blue-400 hover:shadow-sm transition"
+      title={topSignal.details}
+    >
+      <div className="flex items-start gap-1.5">
+        <div className="mt-0.5">{heatIcon}</div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] font-semibold text-gray-700 mb-0.5">Why now</div>
+          <div className="text-xs text-gray-800 line-clamp-2">{topSignal.details}</div>
+          <div className="text-[10px] text-gray-500 mt-0.5">{topSignal.companyName} · {topSignal.daysAgo}d ago</div>
+        </div>
+      </div>
+    </button>
+  );
+};
+
+const LaminarContactCard = ({ contact, company, heat, onViewCompany, onDraftEmail, onSchedule, onAddToSequence, getRoleCategoryLabel }) => {
+  const heatBadge = heat >= 75
+    ? <span className="inline-flex items-center gap-0.5 text-[10px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded"><Flame className="w-3 h-3" />{heat}</span>
+    : heat >= 50
+      ? <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">● {heat}</span>
+      : null;
+
+  const wc = getCompanyWorkingCapital(company);
+  const topSignal = useMemo(() => {
+    const signals = Array.isArray(company?.signals) ? company.signals : [];
+    if (!signals.length) return null;
+    const sorted = [...signals].sort((a, b) => (b.scoreImpact || 0) - (a.scoreImpact || 0));
+    const sig = sorted[0];
+    const occurredAt = sig?.occurredAt ? new Date(sig.occurredAt) : null;
+    const daysAgo = occurredAt && !Number.isNaN(occurredAt.getTime())
+      ? Math.max(0, Math.round((Date.now() - occurredAt.getTime()) / (24 * 60 * 60 * 1000)))
+      : null;
+    return { details: sig.details || sig.description || 'Signal detected', daysAgo };
+  }, [company]);
+
+  return (
+    <div className="p-2.5 bg-white border border-gray-200 rounded hover:border-blue-400 hover:shadow-sm transition">
+      <button type="button" onClick={onViewCompany} className="w-full text-left">
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold truncate">{contact.name || 'Unknown'}</div>
+            <div className="text-xs text-gray-600 truncate">{contact.title}</div>
+            <div className="text-[11px] text-gray-500 truncate">{company?.name}</div>
+          </div>
+          {heatBadge}
+        </div>
+        {wc && (
+          <div className="text-[11px] text-amber-700 font-semibold mb-1">
+            <DollarSign className="inline w-3 h-3 mr-0.5" />{formatCurrencyShort(wc.locked)} working capital locked
+          </div>
+        )}
+        {topSignal && (
+          <div className="text-[11px] text-gray-700 italic mb-1 line-clamp-1" title={topSignal.details}>
+            ⚡ {topSignal.details}{topSignal.daysAgo !== null ? ` · ${topSignal.daysAgo}d ago` : ''}
+          </div>
+        )}
+        {contact.roleCategory && (
+          <div className="text-[10px] text-gray-500">{getRoleCategoryLabel(contact.roleCategory)}</div>
+        )}
+      </button>
+      <div className="flex gap-1 mt-2 pt-2 border-t border-gray-100">
+        <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={(e) => { e.stopPropagation(); onDraftEmail(company); }} title="Draft email">
+          <Mail className="w-3 h-3" />
+        </Button>
+        <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={(e) => { e.stopPropagation(); onSchedule(company); }} title="Schedule call">
+          <Calendar className="w-3 h-3" />
+        </Button>
+        <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={(e) => { e.stopPropagation(); onAddToSequence(company); }} title="Add to sequence">
+          <Plus className="w-3 h-3" />
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+const LaminarSegmentColumn = ({
+  segmentId,
+  companies,
+  sortMode,
+  onSortChange,
+  refreshing,
+  onRefresh,
+  onViewCompany,
+  onDraftEmail,
+  onSchedule,
+  onAddToSequence,
+  getRoleCategoryLabel
+}) => {
+  const segment = LAMINAR_SEGMENTS[segmentId];
+
+  const companiesById = useMemo(() => {
+    const m = {};
+    for (const c of companies) m[c.id] = c;
+    return m;
+  }, [companies]);
+
+  const segmentContacts = useMemo(() => {
+    const list = [];
+    for (const company of companies) {
+      const contacts = Array.isArray(company.contacts) ? company.contacts : [];
+      for (const contact of contacts) {
+        if ((contact.segment || contact.sourceMeta?.segment || '') === segmentId
+          || (contact.segment === undefined && contact.sourceMeta?.segment === undefined)) {
+          // Fall back to inference for legacy contacts
+        }
+      }
+    }
+    // Use the helper from the inner module
+    const flat = [];
+    for (const company of companies) {
+      const contacts = Array.isArray(company.contacts) ? company.contacts : [];
+      for (const contact of contacts) {
+        const seg = contact.segment ?? contact.sourceMeta?.segment ?? null;
+        if (seg === segmentId) {
+          flat.push({ ...contact, _company: company, companyId: company.id });
+        }
+      }
+    }
+    return sortContactsBy(flat, sortMode, companiesById);
+  }, [companies, segmentId, sortMode, companiesById]);
+
+  const topSignal = useMemo(() => getTopSignalForSegment(companies, segmentId), [companies, segmentId]);
+
+  return (
+    <div id={`laminar-segment-${segmentId}`} className={`rounded-lg p-3 min-h-[600px] border ${SEGMENT_COLOR_BG[segmentId]}`}>
+      <div className="mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <span className="text-base">{SEGMENT_ICONS[segmentId]}</span>
+          <h4 className={`font-semibold text-sm ${SEGMENT_COLOR_ACCENT[segmentId]}`}>{segment.label}</h4>
+        </div>
+        <Badge variant="outline" className="text-[10px]">{segmentContacts.length}</Badge>
+      </div>
+
+      <LaminarWhyNowCard
+        topSignal={topSignal}
+        segmentId={segmentId}
+        onView={(companyId) => {
+          const c = companiesById[companyId];
+          if (c) onViewCompany(c);
+        }}
+      />
+
+      <div className="flex items-center gap-1 mb-2">
+        <select
+          value={sortMode}
+          onChange={(e) => onSortChange(segmentId, e.target.value)}
+          className="text-[11px] px-1.5 py-1 border border-gray-300 rounded bg-white flex-1"
+        >
+          <option value="heat">Sort: Heat</option>
+          <option value="score">Sort: Score</option>
+          <option value="recent">Sort: Recent</option>
+          <option value="alpha">Sort: A–Z</option>
+        </select>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 px-2"
+          disabled={refreshing}
+          onClick={() => onRefresh(segmentId)}
+          title="Refresh segment"
+        >
+          {refreshing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+        </Button>
+      </div>
+
+      {refreshing && segmentContacts.length === 0 ? (
+        <div className="space-y-2">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="animate-pulse bg-white/60 h-24 rounded border border-gray-200" />
+          ))}
+        </div>
+      ) : segmentContacts.length === 0 ? (
+        <div className="text-center py-6 px-2">
+          <div className="text-3xl mb-2">{SEGMENT_ICONS[segmentId]}</div>
+          <p className="text-xs text-gray-600 mb-3 leading-relaxed">{segment.description}</p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onRefresh(segmentId)}
+            disabled={refreshing}
+            className="text-xs"
+          >
+            <RefreshCw className="w-3 h-3 mr-1" />Find prospects
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {segmentContacts.map((contact, i) => {
+            const heat = computeContactHeat(contact, contact._company);
+            return (
+              <LaminarContactCard
+                key={`${segmentId}-${contact._company.id}-${contact.email || i}`}
+                contact={contact}
+                company={contact._company}
+                heat={heat}
+                onViewCompany={() => onViewCompany(contact._company)}
+                onDraftEmail={onDraftEmail}
+                onSchedule={onSchedule}
+                onAddToSequence={onAddToSequence}
+                getRoleCategoryLabel={getRoleCategoryLabel}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const LaminarPilotBoard = ({
+  companies,
+  sortBySegment,
+  onSortChange,
+  refreshingSegments,
+  refreshAllProgress,
+  onRefreshSegment,
+  onRefreshAll,
+  onViewCompany,
+  onDraftEmail,
+  onSchedule,
+  onAddToSequence,
+  getRoleCategoryLabel
+}) => {
+  const handleJumpTo = (segmentId) => {
+    const el = document.getElementById(`laminar-segment-${segmentId}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900">Laminar Pilot — Commodity Trading Prospecting</h3>
+          <p className="text-sm text-gray-600">
+            Working capital intelligence for {companies.length} {companies.length === 1 ? 'company' : 'companies'}.
+            Heat-scored contacts grouped by pilot segment.
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onRefreshAll}
+          disabled={!!refreshAllProgress}
+        >
+          {refreshAllProgress
+            ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Refreshing {refreshAllProgress.current}/{refreshAllProgress.total} — {refreshAllProgress.label}…</>
+            : <><RefreshCw className="w-4 h-4 mr-2" />Refresh All Segments</>}
+        </Button>
+      </div>
+
+      <LaminarMetricsBar companies={companies} onJumpToSegment={handleJumpTo} />
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+        {LAMINAR_SEGMENT_ORDER.map((segId) => (
+          <LaminarSegmentColumn
+            key={segId}
+            segmentId={segId}
+            companies={companies}
+            sortMode={sortBySegment[segId] || 'heat'}
+            onSortChange={onSortChange}
+            refreshing={!!refreshingSegments[segId]}
+            onRefresh={onRefreshSegment}
+            onViewCompany={onViewCompany}
+            onDraftEmail={onDraftEmail}
+            onSchedule={onSchedule}
+            onAddToSequence={onAddToSequence}
+            getRoleCategoryLabel={getRoleCategoryLabel}
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
 
 // Main dashboard wrapper with error boundary and performance optimizations
 const DashboardWrapper = () => {
