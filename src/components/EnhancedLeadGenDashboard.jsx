@@ -2404,7 +2404,7 @@ INP² Security Solutions`;
 
   return (
     <div className="p-6 space-y-6 bg-gray-50 min-h-screen">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex items-center gap-4">
           <img
             src="/inp2-logo.png"
@@ -2420,7 +2420,7 @@ INP² Security Solutions`;
             <p className="text-sm text-gray-600">INP² Security Solutions</p>
           </div>
         </div>
-        <div className="flex gap-4 items-center">
+        <div className="flex flex-wrap items-center gap-3 xl:justify-end">
           {apiConnected && (
             <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
               <Globe className="w-3 h-3 mr-1" />
@@ -2429,7 +2429,7 @@ INP² Security Solutions`;
           )}
 
           {/* View Switcher */}
-          <div className="flex bg-gray-100 rounded-lg p-1">
+          <div className="flex flex-wrap bg-gray-100 rounded-lg p-1">
             <Button
               variant={currentView === 'executive' ? 'default' : 'ghost'}
               size="sm"
