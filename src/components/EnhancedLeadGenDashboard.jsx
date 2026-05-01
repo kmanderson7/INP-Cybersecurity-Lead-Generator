@@ -30,6 +30,8 @@ import ExecutiveDashboard from './ExecutiveDashboard';
 import CalendarScheduler from './CalendarScheduler';
 import BulkEmail from './BulkEmail';
 import Analytics from './Analytics';
+import LaminarDecisionCards from './LaminarDecisionCards';
+import LaminarOutreachGenerator from './LaminarOutreachGenerator';
 import {
   Search, Star, TrendingUp, Mail, Phone, Globe, AlertCircle, Shield,
   DollarSign, Users, Calendar, Filter, Loader2, Crown, List, AlertTriangle,
@@ -144,6 +146,10 @@ const netlifyAPI = {
       email: params.email,
       scoringProfile: params.scoringProfile ?? 'commodity_trading',
     });
+  },
+
+  async laminarAI(feature, payload) {
+    return this._postJSON('/.netlify/functions/laminar-ai', { feature, payload });
   },
 
   async analyzeTech(domain) {
@@ -3431,7 +3437,12 @@ INP² Security Solutions`;
                   </TabsList>
 
                   <TabsContent value="overview" className="space-y-4">
-                    {/* Decision Cards */}
+                    {/* Laminar AI-powered Decision Cards (commodity_trading context) */}
+                    {((selectedCompany.contacts || []).some((c) => c.segment || c.sourceMeta?.segment) || selectedCompany.segment) && (
+                      <LaminarDecisionCards company={selectedCompany} laminarAI={netlifyAPI.laminarAI.bind(netlifyAPI)} />
+                    )}
+
+                    {/* Static heuristic Decision Cards (cybersecurity context fallback) */}
                     <div className="grid grid-cols-3 gap-4 mb-6">
                       {(() => {
                         const decisionCards = generateDecisionCards(selectedCompany);
@@ -3836,7 +3847,24 @@ INP² Security Solutions`;
                     {renderSignalsTab(selectedCompany)}
                   </TabsContent>
 
-                  <TabsContent value="outreach">
+                  <TabsContent value="outreach" className="space-y-4">
+                    {((selectedCompany.contacts || []).some((c) => c.segment || c.sourceMeta?.segment) || selectedCompany.segment) && (
+                      <LaminarOutreachGenerator
+                        company={selectedCompany}
+                        laminarAI={netlifyAPI.laminarAI.bind(netlifyAPI)}
+                        onSendEmail={(company, variant, persona, tone) => {
+                          const exec = getPrimaryContact(company);
+                          setEmailData({
+                            to: exec?.email || '',
+                            subject: variant.subject || `Settlement workflow review for ${company.name}`,
+                            body: variant.body || '',
+                            persona,
+                            tone
+                          });
+                          setShowEmailModal(true);
+                        }}
+                      />
+                    )}
                     <Card>
                       <CardHeader>
                         <CardTitle>Outreach Engine v2</CardTitle>
